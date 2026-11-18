@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1"
 bitflags = "2"
+kdl = { version = "6.3.4", default-features = false, features = ["v1-fallback", "span"] }
 smithay = { version = "0.7", default-features = false, features = [
     "backend_winit",
     "desktop",

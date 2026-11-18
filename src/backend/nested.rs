@@ -80,7 +80,7 @@ pub fn run(mut event_loop: EventLoop<Mriya>, mut state: Mriya) -> Result<()> {
         graphics,
         output,
         full_redraw: FULL_REDRAW_FRAMES,
-        cursor: Cursor::new(),
+        cursor: Cursor::new(&state.config.cursor),
         host_cursor_visible: None,
     };
     info!(theme = renderer.cursor.theme_name(), "cursor theme loaded");
@@ -112,7 +112,10 @@ pub fn run(mut event_loop: EventLoop<Mriya>, mut state: Mriya) -> Result<()> {
     );
 
     event_loop
-        .run(None, &mut state, |state| state.flush_clients())
+        .run(None, &mut state, |state| {
+            state.flush_clients();
+            state.spawner.reap();
+        })
         .context("event loop failed")
 }
 

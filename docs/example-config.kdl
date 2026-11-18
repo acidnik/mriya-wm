@@ -1,0 +1,80 @@
+// Mriya WM configuration.
+//
+// The format and the section names are deliberately the same as in niri, so an
+// existing niri config can be copied over: unimplemented sections are ignored
+// with a debug message instead of breaking the parse.
+//
+// Copy this file to $XDG_CONFIG_HOME/mriya/config.kdl (usually
+// ~/.config/mriya/config.kdl) or point at it with `mriya-wm --config <path>`.
+//
+// KDL reference: https://kdl.dev
+
+// Cursor theme and size. Falls back to XCURSOR_THEME / XCURSOR_SIZE, then to
+// "default" and 24.
+cursor {
+    xcursor-theme "Horse-Red"
+    xcursor-size 38
+
+    // Not implemented yet, ignored:
+    // hide-when-typing
+}
+
+input {
+    keyboard {
+        xkb {
+            layout "us,ru"
+            // variant ""
+            // model ""
+            // rules ""
+            options "grp:caps_toggle"
+        }
+        repeat-delay 350
+        repeat-rate 17
+
+        // Not implemented yet (niri: keyboard layout switches per window):
+        // track-layout "window"
+    }
+
+    // Device settings (touchpad/mouse/trackpoint) are applied by libinput and
+    // will be honoured by the TTY backend; while nested they are ignored.
+    // touchpad { tap; natural-scroll; }
+    // mouse { accel-profile "flat"; }
+}
+
+// Environment variables for the session and for every client started by Mriya.
+environment {
+    // XDG_MENU_PREFIX "arch-"
+    // GTK_THEME "Ambiance:light"
+}
+
+// Commands started once the compositor is up. A single string is run through
+// `sh -c`, several arguments are executed directly (like in niri).
+spawn-at-startup "foot"
+
+// Key bindings. Chords are `Modifier+Modifier+Key`, the key name is an XKB
+// symbol name. `Mod` is `Alt` while Mriya runs nested inside another session,
+// and `Super` when it owns the input devices.
+binds {
+    Mod+q { close-window; }
+    Mod+Escape { quit; }
+
+    Mod+Return { spawn "foot"; }
+    Mod+Shift+Return { spawn-sh "foot -e htop"; }
+
+    // Toggle the focused window between floating, maximized and fullscreen.
+    Mod+m { maximize-window; }
+    Mod+f { fullscreen-window; }
+
+    // Media keys work the same way as in niri.
+    XF86AudioRaiseVolume { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "0.05+"; }
+    XF86AudioLowerVolume { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "0.05-"; }
+    XF86AudioMute { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SINK@" "toggle"; }
+    XF86AudioPlay { spawn "playerctl" "play-pause"; }
+}
+
+// Not implemented yet, ignored for now:
+// layout { gaps 4; }
+// output "DP-1" { scale 1; }
+// window-rule { ... }
+// prefer-no-csd
+// animations { off; }

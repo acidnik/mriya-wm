@@ -130,34 +130,23 @@ impl XdgShellHandler for Mriya {
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        let Some(output) = self.space.outputs().next().cloned() else {
-            surface.send_configure();
-            return;
-        };
-        let Some(geometry) = self.space.output_geometry(&output) else {
-            surface.send_configure();
-            return;
-        };
-        let Some(window) = self.window_for(&surface) else {
-            surface.send_configure();
-            return;
-        };
-
-        self.space.map_element(window, geometry.loc, true);
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Maximized);
-            state.size = Some(geometry.size);
-        });
-        surface.send_configure();
+        match self.window_for(&surface) {
+            Some(window) => shell::set_maximized(&mut self.space, &window, true),
+            None => {
+                surface.send_configure();
+            }
+        }
         self.request_redraw();
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        surface.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Maximized);
-            state.size = None;
-        });
-        surface.send_configure();
+        match self.window_for(&surface) {
+            Some(window) => shell::set_maximized(&mut self.space, &window, false),
+            None => {
+                surface.send_configure();
+            }
+        }
+        self.request_redraw();
     }
 
     fn fullscreen_request(
@@ -165,34 +154,23 @@ impl XdgShellHandler for Mriya {
         surface: ToplevelSurface,
         _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
     ) {
-        let Some(output) = self.space.outputs().next().cloned() else {
-            surface.send_configure();
-            return;
-        };
-        let Some(geometry) = self.space.output_geometry(&output) else {
-            surface.send_configure();
-            return;
-        };
-        let Some(window) = self.window_for(&surface) else {
-            surface.send_configure();
-            return;
-        };
-
-        self.space.map_element(window, geometry.loc, true);
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Fullscreen);
-            state.size = Some(geometry.size);
-        });
-        surface.send_configure();
+        match self.window_for(&surface) {
+            Some(window) => shell::set_fullscreen(&mut self.space, &window, true),
+            None => {
+                surface.send_configure();
+            }
+        }
         self.request_redraw();
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        surface.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.size = None;
-        });
-        surface.send_configure();
+        match self.window_for(&surface) {
+            Some(window) => shell::set_fullscreen(&mut self.space, &window, false),
+            None => {
+                surface.send_configure();
+            }
+        }
+        self.request_redraw();
     }
 
     fn minimize_request(&mut self, surface: ToplevelSurface) {

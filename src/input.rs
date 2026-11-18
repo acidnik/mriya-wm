@@ -9,7 +9,7 @@ use smithay::{
         KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
     },
     input::{
-        keyboard::{FilterResult, Keysym},
+        keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, Focus, MotionEvent},
     },
     reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
@@ -18,7 +18,7 @@ use smithay::{
 
 use crate::{
     grabs::{self, MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
-    keybindings::{self, KeyAction},
+    keybindings::Action,
     state::Mriya,
 };
 
@@ -32,10 +32,9 @@ impl Mriya {
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let time = Event::time_msec(&event);
-                if let Some(action) =
-                    self.keyboard_key_to_action(event.key_code(), event.state(), time)
+                if let Some(actions) = self.keyboard_actions(event.key_code(), event.state(), time)
                 {
-                    self.handle_key_action(action);
+                    self.apply_actions(actions);
                 }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
@@ -210,12 +209,12 @@ impl Mriya {
     }
 
     /// Feed a key event to the focused client, intercepting our shortcuts.
-    fn keyboard_key_to_action(
+    fn keyboard_actions(
         &mut self,
         keycode: Keycode,
         state: KeyState,
         time: u32,
-    ) -> Option<KeyAction> {
+    ) -> Option<Vec<Action>> {
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         tracing::trace!(
@@ -224,7 +223,13 @@ impl Mriya {
             focus = ?keyboard.current_focus().map(|surface| format!("{:?}", surface.id())),
             "key event"
         );
-        let mut suppressed: Vec<Keysym> = std::mem::take(&mut self.suppressed_keys);
+        let mut suppressed: Vec<Keycode> = std::mem::take(&mut self.suppressed_keys);
+        // Bindings are matched against the US layout, so `Mod+t` keeps working
+        // when the Russian layout is selected.
+        let binding_keysym = self.binding_keysym(keycode);
+        // The filter closure gets `&mut Mriya`, so the table is moved out for
+        // the duration of the call instead of being borrowed from it.
+        let keybindings = std::mem::take(&mut self.keybindings);
 
         let action = keyboard.input(
             self,
@@ -233,20 +238,28 @@ impl Mriya {
             serial,
             time,
             |_, modifiers, handle| {
-                let keysym = handle.modified_sym();
-                tracing::trace!(keysym = ?keysym, ?modifiers, "input filter");
+                tracing::trace!(
+                    keysym = ?handle.modified_sym(),
+                    ?binding_keysym,
+                    ?modifiers,
+                    "input filter"
+                );
                 match state {
-                    KeyState::Pressed => match keybindings::action_for(*modifiers, keysym) {
-                        Some(action) => {
-                            suppressed.push(keysym);
-                            FilterResult::Intercept(action)
+                    KeyState::Pressed => {
+                        match binding_keysym
+                            .and_then(|keysym| keybindings.action_for(modifiers, keysym))
+                        {
+                            Some(actions) => {
+                                suppressed.push(keycode);
+                                FilterResult::Intercept(actions)
+                            }
+                            None => FilterResult::Forward,
                         }
-                        None => FilterResult::Forward,
-                    },
+                    }
                     KeyState::Released => {
-                        if suppressed.contains(&keysym) {
-                            suppressed.retain(|key| *key != keysym);
-                            FilterResult::Intercept(KeyAction::None)
+                        if suppressed.contains(&keycode) {
+                            suppressed.retain(|key| *key != keycode);
+                            FilterResult::Intercept(Vec::new())
                         } else {
                             FilterResult::Forward
                         }
@@ -256,20 +269,13 @@ impl Mriya {
         );
 
         self.suppressed_keys = suppressed;
+        self.keybindings = keybindings;
         action
     }
 
-    fn handle_key_action(&mut self, action: KeyAction) {
-        match action {
-            KeyAction::None => {}
-            KeyAction::CloseWindow => {
-                if let Some(window) = self.focused_window() {
-                    if let Some(toplevel) = window.toplevel() {
-                        toplevel.send_close();
-                    }
-                }
-            }
-            KeyAction::Quit => self.loop_signal.stop(),
+    fn apply_actions(&mut self, actions: Vec<Action>) {
+        for action in actions {
+            self.run_action(action);
         }
     }
 }

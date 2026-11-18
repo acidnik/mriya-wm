@@ -24,7 +24,7 @@ use xcursor::{
     CursorTheme,
 };
 
-use crate::backend::element::NestedRenderElement;
+use crate::{backend::element::NestedRenderElement, config::CursorConfig};
 
 /// Nominal cursor size in logical pixels when the environment says nothing.
 const DEFAULT_SIZE: u32 = 24;
@@ -48,11 +48,20 @@ struct LoadedCursor {
 }
 
 impl Cursor {
-    pub fn new() -> Self {
-        let theme_name = std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into());
-        let size = std::env::var("XCURSOR_SIZE")
-            .ok()
-            .and_then(|value| value.parse().ok())
+    /// Config wins over the environment, the environment over the defaults.
+    pub fn new(config: &CursorConfig) -> Self {
+        let theme_name = config
+            .xcursor_theme
+            .clone()
+            .or_else(|| std::env::var("XCURSOR_THEME").ok())
+            .unwrap_or_else(|| "default".into());
+        let size = config
+            .xcursor_size
+            .or_else(|| {
+                std::env::var("XCURSOR_SIZE")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+            })
             .filter(|size: &u32| *size > 0)
             .unwrap_or(DEFAULT_SIZE);
 

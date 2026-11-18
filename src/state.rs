@@ -4,7 +4,11 @@ use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    input::{keyboard::Keysym, pointer::CursorImageStatus, Seat, SeatState},
+    input::{
+        keyboard::{xkb, Keycode, Keysym},
+        pointer::CursorImageStatus,
+        Seat, SeatState,
+    },
     reexports::{
         calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
         wayland_server::{
@@ -24,6 +28,15 @@ use smithay::{
     },
 };
 
+use tracing::debug;
+
+use crate::{
+    config::Config,
+    keybindings::{Action, Keybindings},
+    shell,
+    spawn::Spawner,
+};
+
 pub struct Mriya {
     pub start_time: Instant,
     pub socket_name: OsString,
@@ -38,13 +51,23 @@ pub struct Mriya {
     pub pointer_location: Point<f64, Logical>,
     /// Cursor image requested by the focused client.
     pub cursor_status: CursorImageStatus,
-    /// Keysym of shortcuts we intercepted on press, so the matching release is
+    /// Keys of shortcuts we intercepted on press, so the matching release is
     /// not forwarded to the client.
-    pub suppressed_keys: Vec<Keysym>,
+    pub suppressed_keys: Vec<Keycode>,
     /// Set when the scene changed and a new frame has to be drawn.
     pub needs_redraw: bool,
     /// Backend that draws the scene; set once the backend is initialized.
     pub renderer: Option<super::backend::nested::NestedRenderer>,
+
+    /// Everything read from `config.kdl`.
+    pub config: Config,
+    /// Lookup table built from `config.binds`.
+    pub keybindings: Keybindings,
+    /// Starts and reaps client processes.
+    pub spawner: Spawner,
+    /// Layout-independent keymap used for matching key bindings: the binding for
+    /// `Mod+t` has to work while the Russian layout is active too.
+    binding_keymap: xkb::Keymap,
 
     // Smithay protocol state.
     pub compositor_state: CompositorState,
@@ -59,7 +82,7 @@ pub struct Mriya {
 }
 
 impl Mriya {
-    pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>) -> Self {
+    pub fn new(event_loop: &mut EventLoop<Self>, display: Display<Self>, config: Config) -> Self {
         let display_handle = display.handle();
 
         let compositor_state = CompositorState::new::<Self>(&display_handle);
@@ -71,13 +94,30 @@ impl Mriya {
 
         let mut seat = seat_state.new_wl_seat(&display_handle, "mriya");
 
-        // TODO: keyboard layout/options have to come from the config (kdl).
-        seat.add_keyboard(Default::default(), 200, 25)
+        let xkb = config.keyboard.xkb.to_smithay();
+        let repeat_delay = config.keyboard.repeat_delay.unwrap_or(200) as i32;
+        let repeat_rate = config.keyboard.repeat_rate.unwrap_or(25) as i32;
+        seat.add_keyboard(xkb, repeat_delay, repeat_rate)
             .expect("failed to add keyboard to seat");
         seat.add_pointer();
 
         let socket_name = Self::init_wayland_listener(display, event_loop);
         let loop_signal = event_loop.get_signal();
+        let spawner = Spawner::new(socket_name.to_string_lossy().into_owned());
+        let keybindings = Keybindings::new(config.binds.clone());
+        let binding_keymap = {
+            let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+            xkb::Keymap::new_from_names(
+                &context,
+                "",
+                "",
+                "us",
+                "",
+                None,
+                xkb::KEYMAP_COMPILE_NO_FLAGS,
+            )
+            .expect("failed to compile the us keymap for key bindings")
+        };
 
         Self {
             start_time: Instant::now(),
@@ -91,6 +131,10 @@ impl Mriya {
             suppressed_keys: Vec::new(),
             needs_redraw: true,
             renderer: None,
+            config,
+            keybindings,
+            spawner,
+            binding_keymap,
             compositor_state,
             xdg_shell_state,
             shm_state,
@@ -142,6 +186,54 @@ impl Mriya {
         // Unmaps windows whose surface died and drops stale popups.
         self.space.refresh();
         self.popups.cleanup();
+        self.spawner.reap();
+        self.request_redraw();
+    }
+
+    /// Window actions apply to: the keyboard focus, or the topmost window when
+    /// nothing holds focus (the pointer was clicked on the background).
+    fn active_window(&self) -> Option<Window> {
+        self.focused_window()
+            .or_else(|| self.space.elements().last().cloned())
+    }
+
+    /// Keysym a key press would produce in the US layout, used to match key
+    /// bindings no matter which layout is currently active.
+    pub fn binding_keysym(&self, keycode: Keycode) -> Option<Keysym> {
+        self.binding_keymap
+            .key_get_syms_by_level(keycode, 0, 0)
+            .first()
+            .copied()
+    }
+
+    /// Execute an action from the `binds` section.
+    pub fn run_action(&mut self, action: Action) {
+        debug!(?action, "running action");
+        match action {
+            Action::CloseWindow => match self.active_window() {
+                Some(window) => {
+                    if let Some(toplevel) = window.toplevel() {
+                        toplevel.send_close();
+                    }
+                }
+                None => debug!("close-window without a window"),
+            },
+            Action::Quit => self.loop_signal.stop(),
+            Action::FullscreenWindow => {
+                if let Some(window) = self.active_window() {
+                    shell::toggle_fullscreen(&mut self.space, &window);
+                    self.request_redraw();
+                }
+            }
+            Action::MaximizeWindow => {
+                if let Some(window) = self.active_window() {
+                    shell::toggle_maximized(&mut self.space, &window);
+                    self.request_redraw();
+                }
+            }
+            Action::Spawn(argv) => self.spawner.spawn(&argv),
+            Action::SpawnShell(command) => self.spawner.spawn_shell(&command),
+        }
     }
 
     /// Send everything we queued for clients.

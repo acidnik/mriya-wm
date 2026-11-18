@@ -13,13 +13,19 @@ Stack:
 Rust with smithay
 config in kdl
 
-Current state (iteration 1): nested compositor, runs as a window inside the
-current Wayland session and shows client windows without decorations.
+Current state: nested compositor, runs as a window inside the current Wayland
+session and shows client windows without decorations. Configuration is KDL and
+uses the same section names as niri, so an existing niri config can be copied.
 
 ```sh
-cargo run -- -c foot
+cargo run                              # uses ~/.config/mriya/config.kdl
+cargo run -- --config ./my.kdl         # explicit config
+cargo run -- -c foot                   # also start a client
 ```
 
+Start from [docs/example-config.kdl](docs/example-config.kdl). Cursor theme and
+size, `input { keyboard { xkb } }`, `environment`, `spawn-at-startup` and `binds`
+are implemented; other niri sections are ignored for now.
 See [docs/architecture.md](docs/architecture.md) for the code layout, keybindings
 and next steps (the doc is in Russian).
 
