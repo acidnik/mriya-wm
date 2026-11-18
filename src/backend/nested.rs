@@ -181,6 +181,7 @@ impl NestedRenderer {
                 };
 
                 elements.extend(decor::render::elements(
+                    renderer,
                     state.theme.as_ref(),
                     window,
                     content_location,

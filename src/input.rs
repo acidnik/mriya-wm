@@ -310,6 +310,8 @@ impl Mriya {
                 FrameButton::Maximize => {
                     shell::toggle_maximized(self.theme.as_ref(), &mut self.space, &window)
                 }
+                // No minimisation yet: the button is drawn but does nothing.
+                FrameButton::Hide => {}
             }
         }
         true

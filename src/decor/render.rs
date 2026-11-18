@@ -1,15 +1,15 @@
 //! Drawing the frame around a window.
 //!
-//! Stage A uses flat colours from a handful of cached [`SolidColorBuffer`]s.
-//! Stage C replaces the source of this data with the xfwm4 theme tiler; the
-//! element structure (frame background, titlebar, buttons, client content) and
-//! the per-window cache stay the same.
+//! Two paths: the themed one composes the theme images (titlebar tiles, sides,
+//! corners, buttons) and caches the result per window; the flat one is used when
+//! no theme could be loaded so the compositor stays usable.
 
 use std::cell::RefCell;
 
 use smithay::{
     backend::renderer::{
         element::{
+            memory::MemoryRenderBufferRenderElement,
             solid::{SolidColorBuffer, SolidColorRenderElement},
             Kind,
         },
@@ -21,12 +21,12 @@ use smithay::{
 
 use crate::{
     backend::element::NestedRenderElement,
-    decor::{theme::Theme, FrameGeometry},
+    decor::{
+        button_rects, frame, state, state_mut, theme::Theme, FrameButton, FrameGeometry, FrameState,
+    },
 };
 
-use super::{button_rects, state, state_mut, FrameState};
-
-/// Colours of the flat frame, per state.
+/// Colours of the fallback frame drawn without a theme.
 const BORDER_COLOR: [f32; 4] = [0.13, 0.13, 0.15, 1.0];
 const TITLEBAR_ACTIVE: [f32; 4] = [0.29, 0.30, 0.34, 1.0];
 const TITLEBAR_INACTIVE: [f32; 4] = [0.20, 0.20, 0.22, 1.0];
@@ -38,22 +38,21 @@ const CLOSE_INACTIVE: [f32; 4] = [0.42, 0.22, 0.21, 1.0];
 const CLOSE_HOVER: [f32; 4] = [0.85, 0.33, 0.29, 1.0];
 const BUTTON_PRESSED: [f32; 4] = [0.18, 0.18, 0.20, 1.0];
 
-/// Solid colour buffers of one window frame, kept in the window user data so
-/// the damage tracker sees stable element ids.
+/// Solid colour buffers of the fallback frame.
 #[derive(Debug, Default)]
-struct FrameBuffers {
+struct FlatBuffers {
     background: SolidColorBuffer,
     titlebar: SolidColorBuffer,
     maximize: SolidColorBuffer,
     close: SolidColorBuffer,
 }
 
-impl FrameBuffers {
+impl FlatBuffers {
     fn update(
         &mut self,
         geometry: FrameGeometry,
         outer: Rectangle<i32, Logical>,
-        buttons: [(super::FrameButton, Rectangle<i32, Logical>); 2],
+        buttons: [(FrameButton, Rectangle<i32, Logical>); 2],
         state: &FrameState,
     ) {
         let titlebar = Rectangle::new(outer.loc, Size::from((outer.size.w, geometry.top)));
@@ -70,7 +69,7 @@ impl FrameBuffers {
             let pressed = state.pressed == Some(button);
             let hovered = state.hover == Some(button);
             let color = match button {
-                super::FrameButton::Close => {
+                FrameButton::Close => {
                     if pressed {
                         BUTTON_PRESSED
                     } else if hovered {
@@ -81,7 +80,7 @@ impl FrameBuffers {
                         CLOSE_INACTIVE
                     }
                 }
-                super::FrameButton::Maximize => {
+                FrameButton::Maximize | FrameButton::Hide => {
                     if pressed {
                         BUTTON_PRESSED
                     } else if hovered {
@@ -95,48 +94,12 @@ impl FrameBuffers {
             };
 
             let buffer = match button {
-                super::FrameButton::Maximize => &mut self.maximize,
-                super::FrameButton::Close => &mut self.close,
+                FrameButton::Close => &mut self.close,
+                FrameButton::Maximize | FrameButton::Hide => &mut self.maximize,
             };
-            // Leave a small gap so the buttons do not touch the frame edge.
-            let size = Size::from((rect.size.w, (rect.size.h - 2 * super::BUTTON_OFFSET).max(1)));
+            let size = Size::from((rect.size.w, (rect.size.h - 2).max(1)));
             buffer.update(size, color);
         }
-    }
-
-    fn elements(
-        &self,
-        outer: Rectangle<i32, Logical>,
-        buttons: [(super::FrameButton, Rectangle<i32, Logical>); 2],
-        scale: Scale<f64>,
-    ) -> Vec<NestedRenderElement<GlesRenderer>> {
-        let mut elements = Vec::with_capacity(4);
-
-        let mut push = |buffer: &SolidColorBuffer, location: Point<i32, Logical>| {
-            elements.push(NestedRenderElement::Solid(
-                SolidColorRenderElement::from_buffer(
-                    buffer,
-                    location.to_physical_precise_round(scale),
-                    scale,
-                    1.0,
-                    Kind::Unspecified,
-                ),
-            ));
-        };
-
-        push(&self.background, outer.loc);
-        let titlebar = Point::from((outer.loc.x, outer.loc.y));
-        push(&self.titlebar, titlebar);
-
-        for (button, rect) in buttons {
-            let location = Point::from((rect.loc.x, rect.loc.y + super::BUTTON_OFFSET));
-            match button {
-                super::FrameButton::Maximize => push(&self.maximize, location),
-                super::FrameButton::Close => push(&self.close, location),
-            }
-        }
-
-        elements
     }
 }
 
@@ -145,6 +108,7 @@ impl FrameBuffers {
 /// The elements are emitted before the client's own elements, so the frame is
 /// drawn below its client surface but above windows further down the stack.
 pub fn elements(
+    renderer: &mut GlesRenderer,
     theme: Option<&Theme>,
     window: &Window,
     content_location: Point<i32, Logical>,
@@ -156,36 +120,148 @@ pub fn elements(
         state_mut(window).active = active;
     }
 
-    let frame = state(window);
-    if !frame.decorated() {
+    let frame_state = state(window);
+    if !frame_state.decorated() {
         return Vec::new();
     }
 
-    let geometry: FrameGeometry = FrameGeometry::of(theme, &frame);
+    let geometry = FrameGeometry::of(theme, &frame_state);
     if geometry.is_empty() {
         return Vec::new();
     }
 
-    let content = Rectangle::new(content_location, content_size);
-    let outer = geometry.outer_rect(content);
-    tracing::trace!(
-        title = %frame.title,
-        app_id = %frame.app_id,
-        ?content,
-        ?outer,
-        "frame geometry"
+    match theme {
+        Some(theme) => themed_elements(
+            renderer,
+            theme,
+            window,
+            content_location,
+            content_size,
+            &frame_state,
+            geometry,
+            scale,
+        ),
+        None => flat_elements(
+            window,
+            content_location,
+            content_size,
+            &frame_state,
+            geometry,
+            scale,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn themed_elements(
+    renderer: &mut GlesRenderer,
+    theme: &Theme,
+    window: &Window,
+    content_location: Point<i32, Logical>,
+    content_size: Size<i32, Logical>,
+    frame_state: &FrameState,
+    geometry: FrameGeometry,
+    scale: Scale<f64>,
+) -> Vec<NestedRenderElement<GlesRenderer>> {
+    let cache = frame::textures(window, theme, frame_state, content_size, geometry);
+    let textures = &cache.textures;
+
+    let outer = geometry.outer_rect(Rectangle::new(content_location, content_size));
+    let mut elements = Vec::with_capacity(5 + textures.corners.len());
+
+    let mut push = |buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+                    location: Point<i32, Logical>| {
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            {
+                let physical: Point<i32, smithay::utils::Physical> =
+                    location.to_physical_precise_round(scale);
+                physical.to_f64()
+            },
+            buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            elements.push(NestedRenderElement::Memory(element));
+        }
+    };
+
+    push(&textures.titlebar, outer.loc);
+
+    let side_height = (outer.size.h - geometry.top - geometry.bottom).max(0);
+    let _ = side_height;
+    push(
+        &textures.left,
+        Point::from((outer.loc.x, outer.loc.y + geometry.top)),
     );
+    push(
+        &textures.right,
+        Point::from((
+            outer.loc.x + outer.size.w - geometry.right,
+            outer.loc.y + geometry.top,
+        )),
+    );
+    push(
+        &textures.bottom,
+        Point::from((outer.loc.x, outer.loc.y + outer.size.h - geometry.bottom)),
+    );
+
+    for corner in &textures.corners {
+        push(
+            &corner.buffer,
+            Point::from((outer.loc.x + corner.x, outer.loc.y + corner.y)),
+        );
+    }
+
+    elements
+}
+
+fn flat_elements(
+    window: &Window,
+    content_location: Point<i32, Logical>,
+    content_size: Size<i32, Logical>,
+    frame_state: &FrameState,
+    geometry: FrameGeometry,
+    scale: Scale<f64>,
+) -> Vec<NestedRenderElement<GlesRenderer>> {
+    let outer = geometry.outer_rect(Rectangle::new(content_location, content_size));
     let buttons = button_rects(outer, geometry.top);
 
     window
         .user_data()
-        .insert_if_missing(RefCell::<FrameBuffers>::default);
+        .insert_if_missing(RefCell::<FlatBuffers>::default);
     let mut buffers = window
         .user_data()
-        .get::<RefCell<FrameBuffers>>()
-        .expect("frame buffers were just inserted")
+        .get::<RefCell<FlatBuffers>>()
+        .expect("flat buffers were just inserted")
         .borrow_mut();
-    buffers.update(geometry, outer, buttons, &frame);
+    buffers.update(geometry, outer, buttons, frame_state);
 
-    buffers.elements(outer, buttons, scale)
+    let mut elements = Vec::with_capacity(4);
+    let mut push = |buffer: &SolidColorBuffer, location: Point<i32, Logical>| {
+        elements.push(NestedRenderElement::Solid(
+            SolidColorRenderElement::from_buffer(
+                buffer,
+                location.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            ),
+        ));
+    };
+
+    push(&buffers.background, outer.loc);
+    push(&buffers.titlebar, outer.loc);
+
+    for (button, rect) in buttons {
+        let location = Point::from((rect.loc.x, rect.loc.y + 1));
+        match button {
+            FrameButton::Maximize | FrameButton::Hide => push(&buffers.maximize, location),
+            FrameButton::Close => push(&buffers.close, location),
+        }
+    }
+
+    elements
 }

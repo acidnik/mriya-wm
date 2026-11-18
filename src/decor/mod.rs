@@ -9,6 +9,7 @@
 //! existing placement/grab code) unchanged: a window's location stays the
 //! location of its content area.
 
+pub mod frame;
 pub mod protocol;
 pub mod render;
 pub mod theme;
@@ -33,13 +34,156 @@ pub const BUTTON_OFFSET: i32 = 2;
 /// Titlebar buttons Mriya knows about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameButton {
-    Maximize,
     Close,
+    Maximize,
+    Hide,
 }
 
 impl FrameButton {
-    /// Buttons are placed from the right edge of the titlebar in this order.
+    /// Buttons placed from the right edge, in this order, when no theme is
+    /// loaded.
     pub const ALL: [FrameButton; 2] = [FrameButton::Close, FrameButton::Maximize];
+
+    /// Part name prefix in the theme (`close-active`, `maximize-prelight`).
+    pub fn name(&self) -> &'static str {
+        match self {
+            FrameButton::Close => "close",
+            FrameButton::Maximize => "maximize",
+            FrameButton::Hide => "hide",
+        }
+    }
+
+    /// Letter used in the `button_layout` string.
+    pub fn letter(&self) -> char {
+        match self {
+            FrameButton::Close => 'C',
+            FrameButton::Maximize => 'M',
+            FrameButton::Hide => 'H',
+        }
+    }
+
+    pub fn from_letter(letter: char) -> Option<Self> {
+        match letter {
+            'C' => Some(FrameButton::Close),
+            'M' => Some(FrameButton::Maximize),
+            'H' => Some(FrameButton::Hide),
+            _ => None,
+        }
+    }
+}
+
+/// Buttons of one window frame and the titlebar areas they leave free.
+#[derive(Debug, Clone, Default)]
+pub struct ButtonStrip {
+    pub buttons: Vec<(FrameButton, Rectangle<i32, Logical>)>,
+    /// Where the left button group ends (or the left edge).
+    pub left_end: i32,
+    /// Where the right button group starts (or the right edge).
+    pub right_start: i32,
+}
+
+/// Button layout for a themed frame, following `button_layout` like xfwm4:
+/// letters before `|` go on the left, letters after it on the right, in layout
+/// order; the last letter of the right group ends up rightmost.
+pub fn button_layout(
+    theme: &Theme,
+    state: &FrameState,
+    outer_size: (i32, i32),
+    geometry: FrameGeometry,
+) -> ButtonStrip {
+    let (width, _height) = outer_size;
+    let active = state.active;
+    let params = &theme.params;
+    let layout: Vec<char> = params.button_layout.chars().collect();
+
+    let image_size = |button: FrameButton| {
+        theme
+            .button(button.name(), button_state(state, button))
+            .or_else(|| theme.button(button.name(), if active { "active" } else { "inactive" }))
+            .map(|image| (image.width, image.height))
+            .unwrap_or((0, 0))
+    };
+
+    let offset = if state.maximized {
+        params.maximized_offset
+    } else {
+        params.button_offset
+    };
+    let spacing = params.button_spacing;
+
+    let mut strip = ButtonStrip {
+        left_end: 0,
+        right_start: width,
+        ..ButtonStrip::default()
+    };
+
+    // Left group.
+    let mut x = (geometry.left + offset).max(0);
+    let mut index = 0;
+    let mut left_seen = false;
+    while index < layout.len() {
+        let letter = layout[index];
+        index += 1;
+        if letter == '|' {
+            break;
+        }
+        let Some(button) = FrameButton::from_letter(letter) else {
+            continue;
+        };
+        left_seen = true;
+        let (button_width, button_height) = image_size(button);
+        if button_width <= 0 || x + button_width + spacing >= width - geometry.right {
+            continue;
+        }
+        strip.buttons.push((
+            button,
+            Rectangle::new(
+                Point::from((x, ((geometry.top - button_height + 1) / 2).max(0))),
+                Size::from((button_width, button_height)),
+            ),
+        ));
+        x += button_width + spacing;
+    }
+    strip.left_end = if left_seen { x } else { 0 };
+
+    // Right group, from the end of the layout string backwards.
+    let mut x = width - geometry.right + spacing - offset;
+    for letter in layout.iter().rev() {
+        if *letter == '|' {
+            break;
+        }
+        let Some(button) = FrameButton::from_letter(*letter) else {
+            continue;
+        };
+        let (button_width, button_height) = image_size(button);
+        if button_width <= 0 || x - button_width - spacing <= strip.left_end {
+            continue;
+        }
+        x -= button_width + spacing;
+        strip.buttons.push((
+            button,
+            Rectangle::new(
+                Point::from((x, ((geometry.top - button_height + 1) / 2).max(0))),
+                Size::from((button_width, button_height)),
+            ),
+        ));
+    }
+    strip.right_start = x;
+
+    strip
+}
+
+/// Theme part suffix for a button in its current state.
+pub fn button_state(state: &FrameState, button: FrameButton) -> &'static str {
+    if state.pressed == Some(button) {
+        "pressed"
+    } else if state.hover == Some(button) {
+        "prelight"
+    } else if state.active {
+        "active"
+    } else {
+        "inactive"
+    }
 }
 
 /// Per-window decoration state, stored in the window's user data.
@@ -256,8 +400,36 @@ pub fn hit_test(
 
         let part = if content.to_f64().contains(position) {
             FramePart::Content
+        } else if let Some(theme) = theme {
+            let strip = button_layout(theme, &frame, (outer.size.w, outer.size.h), geometry);
+            if let Some((button, _)) = strip.buttons.iter().find(|(_, rect)| {
+                Rectangle::new(outer.loc + rect.loc, rect.size)
+                    .to_f64()
+                    .contains(position)
+            }) {
+                FramePart::Button(*button)
+            } else {
+                let cache = frame::textures(window, theme, &frame, content.size, geometry);
+                let local_x = (position.x - outer.loc.x as f64) as i32;
+                let local_y = (position.y - outer.loc.y as f64) as i32;
+                if !frame::frame_opaque(
+                    &cache.textures,
+                    geometry,
+                    (outer.size.w, outer.size.h),
+                    local_x,
+                    local_y,
+                ) {
+                    // Transparent part of the frame (a rounded corner, an empty
+                    // button area): the click belongs to whatever is below.
+                    continue;
+                }
+                if position.y < content.loc.y as f64 {
+                    FramePart::Titlebar
+                } else {
+                    FramePart::Edge(edge_at(&content, geometry, position))
+                }
+            }
         } else if position.y < content.loc.y as f64 {
-            // Titlebar band, corners included.
             button_rects(outer, geometry.top)
                 .into_iter()
                 .find(|(_, rect)| rect.to_f64().contains(position))
