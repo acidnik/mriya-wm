@@ -10,6 +10,7 @@ use std::{
 };
 
 use kdl::{KdlDocument, KdlNode};
+use regex::Regex;
 use tracing::{debug, info, warn};
 
 use crate::keybindings::{self, Binding, ModAlias};
@@ -26,6 +27,8 @@ pub struct Config {
     pub spawn_at_startup: Vec<Vec<String>>,
     /// Environment variables exported to the session and to spawned clients.
     pub environment: Vec<(String, String)>,
+    /// Per-window rules, later rules win.
+    pub window_rules: Vec<WindowRule>,
 }
 
 /// Server-side decoration settings (`decorations { ... }`).
@@ -40,6 +43,48 @@ pub struct DecorationsConfig {
     pub button_layout: Option<String>,
     /// Palette overrides for the 24 xfwm4 colour symbols.
     pub palette: Vec<(String, String)>,
+}
+
+/// What to do with decorations for a matching window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecorationPolicy {
+    ServerSide,
+    ClientSide,
+}
+
+/// One `match` node of a window rule: the conditions are "and"-ed, several
+/// `match` nodes inside one rule are "or"-ed, like in niri.
+#[derive(Debug, Clone, Default)]
+pub struct RuleMatch {
+    pub app_id: Option<Regex>,
+    pub title: Option<Regex>,
+}
+
+impl RuleMatch {
+    fn matches(&self, app_id: &str, title: &str) -> bool {
+        self.app_id
+            .as_ref()
+            .map(|re| re.is_match(app_id))
+            .unwrap_or(true)
+            && self
+                .title
+                .as_ref()
+                .map(|re| re.is_match(title))
+                .unwrap_or(true)
+    }
+}
+
+/// `window-rule { match app-id=...; decorations "client-side"; }`.
+#[derive(Debug, Clone, Default)]
+pub struct WindowRule {
+    pub matches: Vec<RuleMatch>,
+    pub decorations: Option<DecorationPolicy>,
+}
+
+impl WindowRule {
+    pub fn matches_window(&self, app_id: &str, title: &str) -> bool {
+        self.matches.is_empty() || self.matches.iter().any(|rule| rule.matches(app_id, title))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,6 +133,7 @@ impl Default for Config {
             binds: keybindings::default_binds(),
             spawn_at_startup: Vec::new(),
             environment: Vec::new(),
+            window_rules: Vec::new(),
         }
     }
 }
@@ -160,6 +206,10 @@ fn from_document(document: &KdlDocument, mod_alias: ModAlias) -> Config {
                 }
             }
             "environment" => parse_environment(node, &mut config.environment),
+            "window-rule" => match parse_window_rule(node) {
+                Some(rule) => config.window_rules.push(rule),
+                None => warn!("window-rule without a usable condition is ignored"),
+            },
             // Sections of niri's config that Mriya does not implement yet:
             // layout, output, window-rule, gestures, animations, screenshot-path,
             // prefer-no-csd, hotkey-overlay, xwayland-satellite, ...
@@ -325,6 +375,63 @@ fn parse_binds(node: &KdlNode, binds: &mut Vec<Binding>, mod_alias: ModAlias) {
     }
 }
 
+fn parse_window_rule(node: &KdlNode) -> Option<WindowRule> {
+    let children = node.children()?;
+    let mut rule = WindowRule::default();
+
+    for child in children.nodes() {
+        match child.name().value() {
+            "match" => {
+                let mut condition = RuleMatch::default();
+                for entry in child.entries() {
+                    let Some(name) = entry.name() else {
+                        continue;
+                    };
+                    let Some(pattern) = entry.value().as_string() else {
+                        continue;
+                    };
+                    let compiled = match Regex::new(pattern) {
+                        Ok(regex) => regex,
+                        Err(err) => {
+                            warn!(pattern, %err, "invalid regular expression in window-rule");
+                            continue;
+                        }
+                    };
+                    match name.value() {
+                        "app-id" => condition.app_id = Some(compiled),
+                        "title" => condition.title = Some(compiled),
+                        other => debug!(other, "unsupported match property, ignoring"),
+                    }
+                }
+                if condition.app_id.is_some() || condition.title.is_some() {
+                    rule.matches.push(condition);
+                }
+            }
+            "decorations" => {
+                rule.decorations = match first_string(child).as_deref() {
+                    Some("client-side") => Some(DecorationPolicy::ClientSide),
+                    Some("server-side") => Some(DecorationPolicy::ServerSide),
+                    Some(other) => {
+                        warn!(value = other, "unknown decorations value in window-rule");
+                        None
+                    }
+                    None => None,
+                }
+            }
+            other => debug!(
+                option = other,
+                "window-rule option is not supported yet, ignoring"
+            ),
+        }
+    }
+
+    if rule.matches.is_empty() && rule.decorations.is_none() {
+        None
+    } else {
+        Some(rule)
+    }
+}
+
 fn parse_environment(node: &KdlNode, environment: &mut Vec<(String, String)>) {
     let Some(children) = node.children() else {
         return;
@@ -414,6 +521,17 @@ environment {
 spawn-at-startup "waybar"
 spawn-at-startup "fish" "-c" "echo hi"
 
+window-rule {
+    match app-id=r#"^org\.gnome\."#
+    decorations "client-side"
+}
+
+window-rule {
+    match app-id="firefox"
+    match title="Picture-in-Picture"
+    decorations "server-side"
+}
+
 binds {
     Mod+q { close-window; }
     Mod+Escape { quit; }
@@ -450,6 +568,21 @@ binds {
         assert_eq!(
             config.decorations.title_font.as_deref(),
             Some("Sans Bold 9")
+        );
+        assert_eq!(config.window_rules.len(), 2);
+        assert!(config.window_rules[0].matches_window("org.gnome.Nautilus", "Files"));
+        assert!(!config.window_rules[0].matches_window("foot", "foot"));
+        assert_eq!(
+            config.window_rules[0].decorations,
+            Some(DecorationPolicy::ClientSide)
+        );
+        // Several `match` nodes in one rule are alternatives (OR).
+        assert!(config.window_rules[1].matches_window("firefox", "Mozilla"));
+        assert!(config.window_rules[1].matches_window("foot", "Picture-in-Picture"));
+        assert!(!config.window_rules[1].matches_window("foot", "foot"));
+        assert_eq!(
+            config.window_rules[1].decorations,
+            Some(DecorationPolicy::ServerSide)
         );
         assert_eq!(
             config.decorations.palette,

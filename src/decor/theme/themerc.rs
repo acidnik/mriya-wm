@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::palette::{self, Palette, SYMBOLS};
+use crate::decor::text::TitleFont;
 
 /// Title alignment inside the titlebar, from `title_alignment`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,6 +50,9 @@ pub struct ThemeParams {
     pub shadow_delta_height: i32,
     pub shadow_opacity: u8,
     pub show_app_icon: bool,
+    /// Title font; an xfwm4 setting rather than a theme one, but it takes part in
+    /// composing the titlebar, so it lives here.
+    pub title_font: TitleFont,
 }
 
 impl Default for ThemeParams {
@@ -74,6 +78,7 @@ impl Default for ThemeParams {
             shadow_delta_height: 0,
             shadow_opacity: 0,
             show_app_icon: false,
+            title_font: TitleFont::default(),
         }
     }
 }

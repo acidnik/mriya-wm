@@ -8,211 +8,15 @@
 //! alpha masks, which make transparent parts (rounded corners, empty button
 //! areas) click-through.
 
-use smithay::{
-    backend::{allocator::Fourcc, renderer::element::memory::MemoryRenderBuffer},
-    utils::Transform,
-};
+use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use tracing::trace;
 
 use super::{
+    canvas::{AlphaMask, Canvas},
+    text::TextRenderer,
     theme::{palette::Rgba, Theme, ThemeImage},
     FrameButton, FrameGeometry, FrameState,
 };
-
-/// A composed picture with straight alpha.
-#[derive(Debug, Clone)]
-struct Canvas {
-    width: i32,
-    height: i32,
-    pixels: Vec<u8>,
-}
-
-impl Canvas {
-    fn new(width: i32, height: i32) -> Self {
-        let (width, height) = (width.max(0), height.max(0));
-        Self {
-            width,
-            height,
-            pixels: vec![0; (width * height * 4) as usize],
-        }
-    }
-
-    fn alpha(&self, x: i32, y: i32) -> u8 {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return 0;
-        }
-        self.pixels[((y * self.width + x) * 4 + 3) as usize]
-    }
-
-    /// Source-over one pixel.
-    fn blend(&mut self, x: i32, y: i32, src: [u8; 4]) {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return;
-        }
-        let offset = ((y * self.width + x) * 4) as usize;
-        let src_alpha = u16::from(src[3]);
-        if src_alpha == 0 {
-            return;
-        }
-        if src_alpha == 255 {
-            self.pixels[offset..offset + 4].copy_from_slice(&src);
-            return;
-        }
-
-        let dst_alpha = u16::from(self.pixels[offset + 3]);
-        let inverse = 255 - src_alpha;
-        let out_alpha = src_alpha + dst_alpha * inverse / 255;
-        if out_alpha == 0 {
-            return;
-        }
-        for channel in 0..3 {
-            let numerator = u32::from(src[channel]) * u32::from(src_alpha)
-                + u32::from(self.pixels[offset + channel])
-                    * u32::from(dst_alpha)
-                    * u32::from(inverse)
-                    / 255;
-            self.pixels[offset + channel] = (numerator / u32::from(out_alpha)) as u8;
-        }
-        self.pixels[offset + 3] = out_alpha as u8;
-    }
-
-    fn blit(&mut self, source: &ThemeImage, x: i32, y: i32) {
-        for sy in 0..source.height {
-            for sx in 0..source.width {
-                if let Some(color) = source.pixel(sx, sy) {
-                    self.blend(x + sx, y + sy, color.to_array());
-                }
-            }
-        }
-    }
-
-    /// Repeat `source` to fill a rectangle, like cairo's `EXTEND_REPEAT`.
-    fn blit_tiled(&mut self, source: &ThemeImage, x: i32, y: i32, width: i32, height: i32) {
-        if source.width <= 0 || source.height <= 0 || width <= 0 || height <= 0 {
-            return;
-        }
-        for dy in 0..height {
-            let sy = dy % source.height;
-            for dx in 0..width {
-                let sx = dx % source.width;
-                if let Some(color) = source.pixel(sx, sy) {
-                    self.blend(x + dx, y + dy, color.to_array());
-                }
-            }
-        }
-    }
-
-    /// Stretch along one axis (the other keeps the source size), like
-    /// `xfwmPixmapFill` with a single scale factor.
-    fn blit_stretched(
-        &mut self,
-        source: &ThemeImage,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        horizontally: bool,
-    ) {
-        if source.width <= 0 || source.height <= 0 || width <= 0 || height <= 0 {
-            return;
-        }
-
-        if horizontally {
-            for dx in 0..width {
-                let position = (dx as f64 + 0.5) * source.width as f64 / width as f64 - 0.5;
-                let left = position.floor().max(0.0) as i32;
-                let right = (left + 1).min(source.width - 1);
-                let ratio = (position - left as f64).clamp(0.0, 1.0);
-                for dy in 0..height.min(source.height) {
-                    if let Some(color) = mix(source.pixel(left, dy), source.pixel(right, dy), ratio)
-                    {
-                        self.blend(x + dx, y + dy, color);
-                    }
-                }
-            }
-        } else {
-            for dy in 0..height {
-                let position = (dy as f64 + 0.5) * source.height as f64 / height as f64 - 0.5;
-                let top = position.floor().max(0.0) as i32;
-                let bottom = (top + 1).min(source.height - 1);
-                let ratio = (position - top as f64).clamp(0.0, 1.0);
-                for dx in 0..width.min(source.width) {
-                    if let Some(color) = mix(source.pixel(dx, top), source.pixel(dx, bottom), ratio)
-                    {
-                        self.blend(x + dx, y + dy, color);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Upload as a texture, premultiplied in the byte order `Argb8888` expects.
-    fn to_buffer(&self) -> MemoryRenderBuffer {
-        let mut bytes = Vec::with_capacity(self.pixels.len());
-        for pixel in self.pixels.chunks_exact(4) {
-            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
-            let scale = |channel: u8| ((u16::from(channel) * u16::from(a)) / 255) as u8;
-            // ARGB8888 in memory is B, G, R, A.
-            bytes.extend_from_slice(&[scale(b), scale(g), scale(r), a]);
-        }
-
-        MemoryRenderBuffer::from_slice(
-            &bytes,
-            Fourcc::Argb8888,
-            (self.width, self.height),
-            1,
-            Transform::Normal,
-            None,
-        )
-    }
-
-    fn mask(&self) -> AlphaMask {
-        let area = (self.width * self.height).max(0) as usize;
-        let mut bits = vec![0u64; area.div_ceil(64)];
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.alpha(x, y) > 8 {
-                    let index = (y * self.width + x) as usize;
-                    bits[index / 64] |= 1 << (index % 64);
-                }
-            }
-        }
-        AlphaMask {
-            width: self.width,
-            height: self.height,
-            bits,
-        }
-    }
-}
-
-fn mix(from: Option<Rgba>, to: Option<Rgba>, ratio: f64) -> Option<[u8; 4]> {
-    let (from, to) = (from?, to?);
-    let lerp = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * ratio).round() as u8;
-    Some([
-        lerp(from.r, to.r),
-        lerp(from.g, to.g),
-        lerp(from.b, to.b),
-        lerp(from.a, to.a),
-    ])
-}
-
-/// One bit per pixel: where the frame is actually painted.
-#[derive(Debug, Clone)]
-pub struct AlphaMask {
-    width: i32,
-    height: i32,
-    bits: Vec<u64>,
-}
-
-impl AlphaMask {
-    pub fn contains(&self, x: i32, y: i32) -> bool {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return false;
-        }
-        let index = (y * self.width + x) as usize;
-        self.bits[index / 64] & (1 << (index % 64)) != 0
-    }
-}
 
 /// A corner picture placed at a frame-relative position.
 #[derive(Debug)]
@@ -236,6 +40,167 @@ pub struct FrameTextures {
     pub left_mask: AlphaMask,
     pub right_mask: AlphaMask,
     pub bottom_mask: AlphaMask,
+    /// Drop shadow drawn behind the frame, already downscaled for the GPU.
+    pub shadow: Option<ShadowTexture>,
+}
+
+/// A blurred silhouette of the frame, positioned relative to the frame origin.
+#[derive(Debug)]
+pub struct ShadowTexture {
+    pub offset: (i32, i32),
+    /// Size the shadow should be drawn at (it is built at a lower resolution).
+    pub draw_size: (i32, i32),
+    pub buffer: MemoryRenderBuffer,
+}
+
+/// Shadows are built at 1/N resolution: they are blurry anyway and this keeps
+/// rebuilding them during interactive resizes cheap.
+const SHADOW_SCALE: i32 = 4;
+/// Blur radius in shadow pixels.
+const SHADOW_RADIUS: i32 = 3;
+/// Global opacity multiplier: blurring spreads the same energy over more pixels.
+const SHADOW_STRENGTH: f32 = 1.6;
+
+/// Opaque silhouette of the frame, used as the source for the drop shadow.
+fn frame_silhouette(
+    titlebar: &Canvas,
+    left: &Canvas,
+    right: &Canvas,
+    bottom: &Canvas,
+    corners: &[(i32, i32, &ThemeImage)],
+    size: (i32, i32),
+    geometry: FrameGeometry,
+) -> Canvas {
+    let mut silhouette = Canvas::new(size.0, size.1);
+    let black = [0, 0, 0, 255];
+
+    let mut paint = |canvas: &Canvas, x: i32, y: i32| {
+        for cy in 0..canvas.height {
+            for cx in 0..canvas.width {
+                if canvas.alpha(cx, cy) > 8 {
+                    silhouette.blend(x + cx, y + cy, black);
+                }
+            }
+        }
+    };
+
+    paint(titlebar, 0, 0);
+    paint(left, 0, geometry.top);
+    paint(right, size.0 - geometry.right, geometry.top);
+    paint(bottom, 0, size.1 - geometry.bottom);
+    for (x, y, image) in corners {
+        for dy in 0..image.height {
+            for dx in 0..image.width {
+                if image.alpha(dx, dy) > 8 {
+                    silhouette.blend(x + dx, y + dy, black);
+                }
+            }
+        }
+    }
+
+    silhouette
+}
+
+/// Downscale, blur and fade the silhouette into a shadow texture.
+fn build_shadow(silhouette: &Canvas, opacity: u8) -> Option<ShadowTexture> {
+    if opacity == 0 || silhouette.width <= 0 || silhouette.height <= 0 {
+        return None;
+    }
+
+    let scale = SHADOW_SCALE;
+    let width = (silhouette.width + scale - 1) / scale;
+    let height = (silhouette.height + scale - 1) / scale;
+    let radius = SHADOW_RADIUS;
+
+    // Sampling the silhouette down and padding it by the blur radius.
+    let mut alpha = vec![0u8; ((width + 2 * radius) * (height + 2 * radius)) as usize];
+    let stride = width + 2 * radius;
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for sy in 0..scale {
+                for sx in 0..scale {
+                    sum += u32::from(silhouette.alpha(x * scale + sx, y * scale + sy));
+                    count += 1;
+                }
+            }
+            alpha[((y + radius) * stride + x + radius) as usize] = (sum / count) as u8;
+        }
+    }
+
+    blur_alpha(&mut alpha, stride, height + 2 * radius, radius);
+
+    let opacity = f32::from(opacity) / 100.0 * SHADOW_STRENGTH;
+    let mut canvas = Canvas::new(stride, height + 2 * radius);
+    for y in 0..height + 2 * radius {
+        for x in 0..stride {
+            let value = f32::from(alpha[(y * stride + x) as usize]) * opacity;
+            let value = value.min(255.0) as u8;
+            if value > 0 {
+                canvas.blend(x, y, [0, 0, 0, value]);
+            }
+        }
+    }
+
+    let max_alpha = alpha.iter().copied().max().unwrap_or(0);
+    trace!(
+        ?opacity,
+        max_alpha,
+        width = stride,
+        height = height + 2 * radius,
+        "shadow composed"
+    );
+
+    Some(ShadowTexture {
+        offset: (-radius * scale, -radius * scale),
+        draw_size: (stride * scale, (height + 2 * radius) * scale),
+        buffer: canvas.to_buffer(),
+    })
+}
+
+/// Separable box blur, three passes approximate a gaussian well enough.
+fn blur_alpha(alpha: &mut [u8], stride: i32, height: i32, radius: i32) {
+    if radius <= 0 {
+        return;
+    }
+    let width = stride;
+    let mut scratch = vec![0u8; alpha.len()];
+
+    for _ in 0..3 {
+        // Horizontal.
+        for y in 0..height {
+            for x in 0..width {
+                let mut sum = 0u32;
+                let mut count = 0u32;
+                for dx in -radius..=radius {
+                    let sx = x + dx;
+                    if sx < 0 || sx >= width {
+                        continue;
+                    }
+                    sum += u32::from(alpha[(y * width + sx) as usize]);
+                    count += 1;
+                }
+                scratch[(y * width + x) as usize] = (sum / count) as u8;
+            }
+        }
+        // Vertical.
+        for y in 0..height {
+            for x in 0..width {
+                let mut sum = 0u32;
+                let mut count = 0u32;
+                for dy in -radius..=radius {
+                    let sy = y + dy;
+                    if sy < 0 || sy >= height {
+                        continue;
+                    }
+                    sum += u32::from(scratch[(sy * width + x) as usize]);
+                    count += 1;
+                }
+                alpha[(y * width + x) as usize] = (sum / count) as u8;
+            }
+        }
+    }
 }
 
 /// Is the frame painted at this frame-relative point? The content rect is
@@ -286,7 +251,7 @@ pub fn frame_opaque(
 }
 
 /// Cache key of a composed frame: everything that changes its pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameKey {
     pub width: i32,
     pub height: i32,
@@ -294,6 +259,8 @@ pub struct FrameKey {
     pub maximized: bool,
     pub hover: Option<FrameButton>,
     pub pressed: Option<FrameButton>,
+    /// Title text is rendered into the titlebar texture.
+    pub title: String,
 }
 
 /// A composed frame kept in the window user data.
@@ -308,6 +275,7 @@ pub struct CachedFrame {
 pub fn textures<'a>(
     window: &'a smithay::desktop::Window,
     theme: &Theme,
+    text: &mut TextRenderer,
     state: &FrameState,
     content_size: smithay::utils::Size<i32, smithay::utils::Logical>,
     geometry: FrameGeometry,
@@ -330,6 +298,7 @@ pub fn textures<'a>(
         maximized: state.maximized,
         hover: state.hover,
         pressed: state.pressed,
+        title: state.title.clone(),
     };
 
     // Rebuild outside of the borrow of `cell` to keep `state` readable while
@@ -340,7 +309,7 @@ pub fn textures<'a>(
         .map(|cached| cached.key != key)
         .unwrap_or(true);
     if needs_build {
-        let textures = build(theme, state, (outer_size.w, outer_size.h), geometry);
+        let textures = build(theme, text, state, (outer_size.w, outer_size.h), geometry);
         *cell.borrow_mut() = Some(CachedFrame { key, textures });
     }
 
@@ -355,6 +324,7 @@ pub fn textures<'a>(
 /// content size is derived from them.
 pub fn build(
     theme: &Theme,
+    text: &mut TextRenderer,
     state: &FrameState,
     outer_size: (i32, i32),
     geometry: FrameGeometry,
@@ -375,6 +345,7 @@ pub fn build(
     let mut titlebar_canvas = Canvas::new(width, geometry.top);
     compose_titlebar(
         theme,
+        text,
         state,
         &mut titlebar_canvas,
         strip_x,
@@ -395,6 +366,7 @@ pub fn build(
     let bottom = compose_side(theme, "bottom", width, geometry.bottom, active, true);
 
     let mut corners = Vec::new();
+    let mut corner_images: Vec<(i32, i32, &ThemeImage)> = Vec::new();
     for (corner, anchor_right, anchor_bottom) in [
         ("top-left", false, false),
         ("top-right", true, false),
@@ -410,6 +382,7 @@ pub fn build(
         } else {
             0
         };
+        corner_images.push((x, y, image));
         corners.push(CornerTexture {
             x,
             y,
@@ -433,7 +406,19 @@ pub fn build(
         "frame composed"
     );
 
+    let silhouette = frame_silhouette(
+        &titlebar_canvas,
+        &left,
+        &right,
+        &bottom,
+        &corner_images,
+        (width, height),
+        geometry,
+    );
+    let shadow = build_shadow(&silhouette, theme.params.shadow_opacity);
+
     FrameTextures {
+        shadow,
         titlebar: titlebar_canvas.to_buffer(),
         left: left.to_buffer(),
         right: right.to_buffer(),
@@ -446,8 +431,10 @@ pub fn build(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compose_titlebar(
     theme: &Theme,
+    text: &mut TextRenderer,
     state: &FrameState,
     canvas: &mut Canvas,
     strip_x: i32,
@@ -458,11 +445,6 @@ fn compose_titlebar(
     let active = state.active;
     let height = canvas.height;
     if strip_width <= 0 {
-        return;
-    }
-
-    if let Some(stretch) = theme.title_stretch(active) {
-        canvas.blit_stretched(stretch, strip_x, 0, strip_width, height, true);
         return;
     }
 
@@ -477,36 +459,133 @@ fn compose_titlebar(
     // `full_width_title` runs the caps from the frame edges, otherwise they hug
     // the title text area, which for now means the button groups.
     let (w1, w5) = (left_cap.min(strip_width), right_cap.min(strip_width));
-    let w3 = (strip_width - w1 - w2 - w4 - w5).max(0);
 
-    let mut x = strip_x;
-    if let Some(image) = theme.state_part("title-1", active) {
-        canvas.blit_tiled(image, x, 0, w1, height);
-    }
-    x += w1;
+    if let Some(stretch) = theme.title_stretch(active) {
+        canvas.blit_stretched(stretch, strip_x, 0, strip_width, height, true);
+    } else {
+        let w3 = (strip_width - w1 - w2 - w4 - w5).max(0);
 
-    if let Some(image) = theme.state_part("title-2", active) {
-        canvas.blit_tiled(image, x, 0, w2, height);
-    }
-    x += w2;
+        let mut x = strip_x;
+        if let Some(image) = theme.state_part("title-1", active) {
+            canvas.blit_tiled(image, x, 0, w1, height);
+        }
+        x += w1;
 
-    if let Some(image) = theme.state_part("title-3", active) {
-        canvas.blit_tiled(image, x, 0, w3, height);
-    }
-    x += w3;
+        if let Some(image) = theme.state_part("title-2", active) {
+            canvas.blit_tiled(image, x, 0, w2, height);
+        }
+        x += w2;
 
-    if let Some(image) = theme.state_part("title-4", active) {
-        x = x.min(strip_x + strip_width - w4).max(strip_x);
-        canvas.blit_tiled(image, x, 0, w4, height);
-        x += w4;
-    }
+        if let Some(image) = theme.state_part("title-3", active) {
+            canvas.blit_tiled(image, x, 0, w3, height);
+        }
+        x += w3;
 
-    if let Some(image) = theme.state_part("title-5", active) {
-        let remaining = (strip_x + strip_width - x).max(0);
-        if remaining > 0 {
-            canvas.blit_tiled(image, x, 0, remaining, height);
+        if let Some(image) = theme.state_part("title-4", active) {
+            x = x.min(strip_x + strip_width - w4).max(strip_x);
+            canvas.blit_tiled(image, x, 0, w4, height);
+            x += w4;
+        }
+
+        if let Some(image) = theme.state_part("title-5", active) {
+            let remaining = (strip_x + strip_width - x).max(0);
+            if remaining > 0 {
+                canvas.blit_tiled(image, x, 0, remaining, height);
+            }
         }
     }
+
+    draw_title_text(
+        theme,
+        text,
+        state,
+        canvas,
+        strip_x,
+        strip_width,
+        w1,
+        w2,
+        w4,
+        w5,
+        height,
+    );
+}
+
+/// Title text area: between the title caps, clipped to the titlebar.
+#[allow(clippy::too_many_arguments)]
+fn draw_title_text(
+    theme: &Theme,
+    text: &mut TextRenderer,
+    state: &FrameState,
+    canvas: &mut Canvas,
+    strip_x: i32,
+    strip_width: i32,
+    w1: i32,
+    w2: i32,
+    w4: i32,
+    w5: i32,
+    height: i32,
+) {
+    if state.title.is_empty() {
+        return;
+    }
+
+    let params = &theme.params;
+    let active = state.active;
+    let x0 = (strip_x + w1 + w2).max(strip_x);
+    let x1 = (strip_x + strip_width - w5 - w4).min(strip_x + strip_width);
+    if x1 <= x0 {
+        return;
+    }
+
+    let area = smithay::utils::Rectangle::new(
+        smithay::utils::Point::from((x0, 0)),
+        smithay::utils::Size::from((x1 - x0, height)),
+    );
+    let vertical_offset = if active {
+        params.title_vertical_offset_active
+    } else {
+        params.title_vertical_offset_inactive
+    };
+    let color = theme_text_color(params, active);
+    let shadow = if active {
+        params.title_shadow_active
+    } else {
+        params.title_shadow_inactive
+    };
+    let shadow_color = theme_text_shadow_color(params, active);
+
+    text.draw(
+        canvas,
+        &params.title_font,
+        &state.title,
+        area,
+        vertical_offset,
+        params.title_alignment,
+        color,
+        shadow,
+        shadow_color,
+    );
+}
+
+fn theme_text_color(params: &super::theme::ThemeParams, active: bool) -> Rgba {
+    let symbol = if active {
+        "active_text_color"
+    } else {
+        "inactive_text_color"
+    };
+    params
+        .palette
+        .get(symbol)
+        .unwrap_or(Rgba::rgb(255, 255, 255))
+}
+
+fn theme_text_shadow_color(params: &super::theme::ThemeParams, active: bool) -> Rgba {
+    let symbol = if active {
+        "active_text_shadow_color"
+    } else {
+        "inactive_text_shadow_color"
+    };
+    params.palette.get(symbol).unwrap_or(Rgba::TRANSPARENT)
 }
 
 fn compose_side(
@@ -626,7 +705,8 @@ mod tests {
             right: 5,
             bottom: 5,
         };
-        let textures = build(&theme, &state(), (200, 100), geometry);
+        let mut text = TextRenderer::new();
+        let textures = build(&theme, &mut text, &state(), (200, 100), geometry);
         // The texture covers the whole frame width; corners sit on top of it.
         assert_eq!(textures.titlebar_mask.width, 200);
         assert_eq!(textures.titlebar_mask.height, 20);
@@ -642,7 +722,8 @@ mod tests {
             right: 5,
             bottom: 5,
         };
-        let textures = build(&theme, &state(), (200, 100), geometry);
+        let mut text = TextRenderer::new();
+        let textures = build(&theme, &mut text, &state(), (200, 100), geometry);
 
         assert!(!frame_opaque(&textures, geometry, (200, 100), 0, 0));
         assert!(frame_opaque(&textures, geometry, (200, 100), 3, 3));

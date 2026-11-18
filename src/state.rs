@@ -71,6 +71,8 @@ pub struct Mriya {
 
     /// Loaded xfwm4 theme, if one was found.
     pub theme: Option<Theme>,
+    /// Font system and glyph cache for window titles.
+    pub text: crate::decor::text::TextRenderer,
     /// Everything read from `config.kdl`.
     pub config: Config,
     /// Lookup table built from `config.binds`.
@@ -120,6 +122,7 @@ impl Mriya {
         let socket_name = Self::init_wayland_listener(display, event_loop);
         let loop_signal = event_loop.get_signal();
         let theme = Self::load_theme(&config);
+        let text = crate::decor::text::TextRenderer::new();
         let spawner = Spawner::new(socket_name.to_string_lossy().into_owned());
         let keybindings = Keybindings::new(config.binds.clone());
         let binding_keymap = {
@@ -151,6 +154,7 @@ impl Mriya {
             frame_press: None,
             last_titlebar_click: None,
             theme,
+            text,
             config,
             keybindings,
             spawner,
@@ -176,6 +180,9 @@ impl Mriya {
         }
         if let Some(layout) = &config.decorations.button_layout {
             params.button_layout = layout.clone();
+        }
+        if let Some(spec) = &config.decorations.title_font {
+            params.title_font = crate::decor::text::TitleFont::parse(spec);
         }
 
         let name = config
@@ -235,6 +242,27 @@ impl Mriya {
         self.space.refresh();
         self.popups.cleanup();
         self.spawner.reap();
+        self.request_redraw();
+    }
+
+    /// Re-evaluate `window-rule`s for a window whose title or app-id changed.
+    pub fn apply_window_rules(&mut self, window: &Window) {
+        let Some(mode) = self.rule_decoration_mode(window) else {
+            return;
+        };
+        let current = decor::state(window).mode;
+        if current == mode {
+            return;
+        }
+
+        decor::state_mut(window).mode = mode;
+        // Tell the client as well, if it speaks xdg-decoration.
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.decoration_mode = Some(mode);
+            });
+            toplevel.send_pending_configure();
+        }
         self.request_redraw();
     }
 

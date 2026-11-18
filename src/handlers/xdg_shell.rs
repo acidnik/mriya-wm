@@ -53,6 +53,7 @@ impl XdgShellHandler for Mriya {
     fn title_changed(&mut self, surface: ToplevelSurface) {
         if let Some(window) = self.window_for_toplevel(&surface) {
             decor::state_mut(&window).title = surface_title(&surface);
+            self.apply_window_rules(&window);
         }
         self.request_redraw();
     }
@@ -60,6 +61,7 @@ impl XdgShellHandler for Mriya {
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
         if let Some(window) = self.window_for_toplevel(&surface) {
             decor::state_mut(&window).app_id = surface_app_id(&surface);
+            self.apply_window_rules(&window);
         }
         self.request_redraw();
     }

@@ -9,9 +9,11 @@
 //! existing placement/grab code) unchanged: a window's location stays the
 //! location of its content area.
 
+pub mod canvas;
 pub mod frame;
 pub mod protocol;
 pub mod render;
+pub mod text;
 pub mod theme;
 
 use std::cell::{Ref, RefCell, RefMut};
@@ -370,6 +372,7 @@ pub fn button_rects(
 /// Topmost window frame under `position`, in space coordinates.
 pub fn hit_test(
     theme: Option<&Theme>,
+    text: &mut text::TextRenderer,
     space: &Space<Window>,
     position: Point<f64, Logical>,
 ) -> Option<FrameHit> {
@@ -409,7 +412,7 @@ pub fn hit_test(
             }) {
                 FramePart::Button(*button)
             } else {
-                let cache = frame::textures(window, theme, &frame, content.size, geometry);
+                let cache = frame::textures(window, theme, text, &frame, content.size, geometry);
                 let local_x = (position.x - outer.loc.x as f64) as i32;
                 let local_y = (position.y - outer.loc.y as f64) as i32;
                 if !frame::frame_opaque(

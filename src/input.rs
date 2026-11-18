@@ -216,7 +216,8 @@ impl Mriya {
         serial: Serial,
         location: Point<f64, Logical>,
     ) -> bool {
-        let Some(hit) = decor::hit_test(self.theme.as_ref(), &self.space, location) else {
+        let Some(hit) = decor::hit_test(self.theme.as_ref(), &mut self.text, &self.space, location)
+        else {
             return false;
         };
         if hit.part == FramePart::Content {
@@ -319,7 +320,12 @@ impl Mriya {
 
     /// Track which titlebar button the pointer is over, for hover states.
     fn update_frame_hover(&mut self) {
-        let hit = decor::hit_test(self.theme.as_ref(), &self.space, self.pointer_location);
+        let hit = decor::hit_test(
+            self.theme.as_ref(),
+            &mut self.text,
+            &self.space,
+            self.pointer_location,
+        );
         let (hovered_window, hovered_button) = match &hit {
             Some(hit) => match hit.part {
                 FramePart::Button(button) => (Some(hit.window.clone()), Some(button)),

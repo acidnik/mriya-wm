@@ -22,7 +22,8 @@ use smithay::{
 use crate::{
     backend::element::NestedRenderElement,
     decor::{
-        button_rects, frame, state, state_mut, theme::Theme, FrameButton, FrameGeometry, FrameState,
+        button_rects, frame, state, state_mut, text::TextRenderer, theme::Theme, FrameButton,
+        FrameGeometry, FrameState,
     },
 };
 
@@ -107,9 +108,11 @@ impl FlatBuffers {
 ///
 /// The elements are emitted before the client's own elements, so the frame is
 /// drawn below its client surface but above windows further down the stack.
+#[allow(clippy::too_many_arguments)]
 pub fn elements(
     renderer: &mut GlesRenderer,
     theme: Option<&Theme>,
+    text: &mut TextRenderer,
     window: &Window,
     content_location: Point<i32, Logical>,
     content_size: Size<i32, Logical>,
@@ -134,6 +137,7 @@ pub fn elements(
         Some(theme) => themed_elements(
             renderer,
             theme,
+            text,
             window,
             content_location,
             content_size,
@@ -156,6 +160,7 @@ pub fn elements(
 fn themed_elements(
     renderer: &mut GlesRenderer,
     theme: &Theme,
+    text: &mut TextRenderer,
     window: &Window,
     content_location: Point<i32, Logical>,
     content_size: Size<i32, Logical>,
@@ -163,11 +168,34 @@ fn themed_elements(
     geometry: FrameGeometry,
     scale: Scale<f64>,
 ) -> Vec<NestedRenderElement<GlesRenderer>> {
-    let cache = frame::textures(window, theme, frame_state, content_size, geometry);
+    let cache = frame::textures(window, theme, text, frame_state, content_size, geometry);
     let textures = &cache.textures;
 
     let outer = geometry.outer_rect(Rectangle::new(content_location, content_size));
-    let mut elements = Vec::with_capacity(5 + textures.corners.len());
+    let mut elements = Vec::with_capacity(6 + textures.corners.len());
+
+    // Shadow first: it goes under the frame.
+    if let Some(shadow) = &textures.shadow {
+        let location = Point::<i32, Logical>::from((
+            outer.loc.x + shadow.offset.0,
+            outer.loc.y + shadow.offset.1,
+        ));
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            {
+                let physical: Point<i32, smithay::utils::Physical> =
+                    location.to_physical_precise_round(scale);
+                physical.to_f64()
+            },
+            &shadow.buffer,
+            None,
+            None,
+            Some(Size::from(shadow.draw_size)),
+            Kind::Unspecified,
+        ) {
+            elements.push(NestedRenderElement::Memory(element));
+        }
+    }
 
     let mut push = |buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
                     location: Point<i32, Logical>| {

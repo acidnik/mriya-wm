@@ -92,9 +92,16 @@ binds {
     XF86AudioPlay { spawn "playerctl" "play-pause"; }
 }
 
+// Per-window rules, evaluated whenever a window's app-id or title changes; the
+// last matching rule wins. Useful for applications that insist on drawing their
+// own client-side decorations.
+window-rule {
+    match app-id=r#"^org\.gnome\."#
+    decorations "client-side"
+}
+
 // Not implemented yet, ignored for now:
 // layout { gaps 4; }
 // output "DP-1" { scale 1; }
-// window-rule { ... }
 // prefer-no-csd
 // animations { off; }

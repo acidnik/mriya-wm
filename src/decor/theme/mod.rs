@@ -20,7 +20,7 @@ use std::{
 use tracing::{debug, info, warn};
 
 pub use image::ThemeImage;
-pub use themerc::ThemeParams;
+pub use themerc::{Alignment, ThemeParams, TitleShadow};
 
 /// Borders along the sides of the frame.
 const SIDES: [&str; 3] = ["left", "right", "bottom"];
