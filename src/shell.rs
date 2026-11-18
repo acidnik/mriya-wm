@@ -9,8 +9,10 @@ use std::sync::Mutex;
 use smithay::{
     desktop::{Space, Window},
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
-    utils::{Logical, Point, Rectangle},
+    utils::{Logical, Point, Rectangle, Size},
 };
+
+use crate::decor::{self, FrameGeometry};
 
 /// Offset of each subsequent window in the cascade, in logical pixels.
 const CASCADE_STEP: i32 = 32;
@@ -23,7 +25,7 @@ const CASCADE_WRAP: i32 = 8;
 #[derive(Default)]
 struct SavedGeometry(Mutex<Option<Rectangle<i32, Logical>>>);
 
-/// Location for a newly mapped window.
+/// Location for a newly mapped window's frame.
 pub fn location_for_new_window(space: &Space<Window>) -> Point<i32, Logical> {
     let Some(output) = space.outputs().next() else {
         return (0, 0).into();
@@ -44,112 +46,104 @@ pub fn location_for_new_window(space: &Space<Window>) -> Point<i32, Logical> {
 
 /// Toggle fullscreen for `window`.
 pub fn toggle_fullscreen(space: &mut Space<Window>, window: &Window) {
-    let Some(toplevel) = window.toplevel() else {
-        return;
-    };
-    let fullscreen =
-        toplevel.with_pending_state(|state| state.states.contains(xdg_toplevel::State::Fullscreen));
-
-    if fullscreen {
-        restore_geometry(space, window);
-        toplevel.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.size = None;
-        });
-    } else {
-        let Some(geometry) = output_geometry(space) else {
-            return;
-        };
-        remember_geometry(space, window);
-        space.map_element(window.clone(), geometry.loc, true);
-        toplevel.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Fullscreen);
-            state.size = Some(geometry.size);
-        });
-    }
-
-    toplevel.send_pending_configure();
+    let fullscreen = decor::state(window).fullscreen;
+    set_fullscreen(space, window, !fullscreen);
 }
 
 /// Toggle maximization for `window`.
 pub fn toggle_maximized(space: &mut Space<Window>, window: &Window) {
-    let Some(toplevel) = window.toplevel() else {
-        return;
-    };
-    let maximized =
-        toplevel.with_pending_state(|state| state.states.contains(xdg_toplevel::State::Maximized));
-
-    if maximized {
-        restore_geometry(space, window);
-        toplevel.with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Maximized);
-            state.size = None;
-        });
-    } else {
-        let Some(geometry) = output_geometry(space) else {
-            return;
-        };
-        remember_geometry(space, window);
-        space.map_element(window.clone(), geometry.loc, true);
-        toplevel.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Maximized);
-            state.size = Some(geometry.size);
-        });
-    }
-
-    toplevel.send_pending_configure();
+    let maximized = decor::state(window).maximized;
+    set_maximized(space, window, !maximized);
 }
 
-/// Maximize / fullscreen a window on a client request.
+/// Fullscreen / unfullscreen a window (client request or key binding).
 pub fn set_fullscreen(space: &mut Space<Window>, window: &Window, on: bool) {
     let Some(toplevel) = window.toplevel() else {
         return;
     };
-    if on {
-        let Some(geometry) = output_geometry(space) else {
-            toplevel.send_configure();
-            return;
-        };
-        remember_geometry(space, window);
-        space.map_element(window.clone(), geometry.loc, true);
-        toplevel.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Fullscreen);
-            state.size = Some(geometry.size);
-        });
-    } else {
+
+    {
+        let mut frame = decor::state_mut(window);
+        frame.fullscreen = on;
+    }
+    let geometry = FrameGeometry::of(&decor::state(window));
+
+    if !on {
         restore_geometry(space, window);
         toplevel.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Fullscreen);
             state.size = None;
         });
+        toplevel.send_configure();
+        return;
     }
+
+    let Some(output_geo) = output_geometry(space) else {
+        toplevel.send_configure();
+        return;
+    };
+
+    remember_geometry(space, window);
+    let content_size = content_size_for(output_geo.size, geometry);
+    space.map_element(
+        window.clone(),
+        output_geo.loc + geometry.content_offset(),
+        true,
+    );
+    toplevel.with_pending_state(|state| {
+        state.states.set(xdg_toplevel::State::Fullscreen);
+        state.size = Some(content_size);
+    });
     toplevel.send_configure();
 }
 
-/// Maximize / unmaximize a window on a client request.
+/// Maximize / unmaximize a window (client request or key binding).
 pub fn set_maximized(space: &mut Space<Window>, window: &Window, on: bool) {
     let Some(toplevel) = window.toplevel() else {
         return;
     };
-    if on {
-        let Some(geometry) = output_geometry(space) else {
-            toplevel.send_configure();
-            return;
-        };
-        remember_geometry(space, window);
-        space.map_element(window.clone(), geometry.loc, true);
-        toplevel.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Maximized);
-            state.size = Some(geometry.size);
-        });
-    } else {
+
+    {
+        let mut frame = decor::state_mut(window);
+        frame.maximized = on;
+    }
+    let geometry = FrameGeometry::of(&decor::state(window));
+
+    if !on {
         restore_geometry(space, window);
         toplevel.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Maximized);
             state.size = None;
         });
+        toplevel.send_configure();
+        return;
     }
+
+    let Some(output_geo) = output_geometry(space) else {
+        toplevel.send_configure();
+        return;
+    };
+
+    remember_geometry(space, window);
+    let content_size = content_size_for(output_geo.size, geometry);
+    space.map_element(
+        window.clone(),
+        output_geo.loc + geometry.content_offset(),
+        true,
+    );
+    toplevel.with_pending_state(|state| {
+        state.states.set(xdg_toplevel::State::Maximized);
+        state.size = Some(content_size);
+    });
     toplevel.send_configure();
+}
+
+/// Size of the client content when the frame fills `outer`.
+fn content_size_for(outer: Size<i32, Logical>, geometry: FrameGeometry) -> Size<i32, Logical> {
+    Size::from((
+        (outer.w - geometry.left - geometry.right).max(1),
+        (outer.h - geometry.top - geometry.bottom).max(1),
+    ))
 }
 
 fn output_geometry(space: &Space<Window>) -> Option<Rectangle<i32, Logical>> {

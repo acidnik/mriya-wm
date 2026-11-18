@@ -3,6 +3,8 @@
 //! The nested backend forwards whatever the host session gives us; for the
 //! pointer that means absolute positions inside our window.
 
+use std::time::{Duration, Instant};
+
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
@@ -13,14 +15,20 @@ use smithay::{
         pointer::{AxisFrame, ButtonEvent, Focus, MotionEvent},
     },
     reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER},
 };
 
 use crate::{
+    decor::{self, FrameButton, FramePart},
     grabs::{self, MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
     keybindings::Action,
+    shell,
     state::Mriya,
 };
+
+/// Two clicks closer than this in time and space count as a double click.
+const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_DISTANCE: f64 = 6.0;
 
 /// Left mouse button (linux/input-event-codes.h).
 const BTN_LEFT: u32 = 0x110;
@@ -47,6 +55,7 @@ impl Mriya {
 
                 let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
                 self.pointer_motion_to(pos, event.time_msec());
+                self.update_frame_hover();
             }
             // Relative motion only matters for the winit backend when the host
             // sends it; the pointer position comes from absolute events there.
@@ -66,11 +75,21 @@ impl Mriya {
                         return;
                     }
 
+                    if self.frame_button_pressed(button, serial, location) {
+                        pointer.frame(self);
+                        return;
+                    }
+
                     if let Some((window, _)) = self.window_under(location) {
                         self.focus_window(&window);
                     } else {
                         self.clear_focus(serial);
                     }
+                }
+
+                if button_state == ButtonState::Released && self.frame_button_released(button) {
+                    pointer.frame(self);
+                    return;
                 }
 
                 pointer.button(
@@ -189,8 +208,144 @@ impl Mriya {
         }
     }
 
+    /// Handle a button press that lands on a window frame. Returns `true` when
+    /// the frame consumed the event.
+    fn frame_button_pressed(
+        &mut self,
+        button: u32,
+        serial: Serial,
+        location: Point<f64, Logical>,
+    ) -> bool {
+        let Some(hit) = decor::hit_test(&self.space, location) else {
+            return false;
+        };
+        if hit.part == FramePart::Content {
+            return false;
+        }
+
+        self.focus_window(&hit.window);
+
+        match hit.part {
+            FramePart::Content => false,
+            FramePart::Button(frame_button) => {
+                if button == BTN_LEFT {
+                    decor::state_mut(&hit.window).pressed = Some(frame_button);
+                    self.frame_press = Some((hit.window.clone(), frame_button));
+                    self.request_redraw();
+                }
+                true
+            }
+            FramePart::Titlebar => {
+                if button != BTN_LEFT {
+                    return true;
+                }
+
+                let now = Instant::now();
+                let double_click = self
+                    .last_titlebar_click
+                    .map(|(time, position)| {
+                        now.duration_since(time) < DOUBLE_CLICK_TIME
+                            && (position.x - location.x).abs() < DOUBLE_CLICK_DISTANCE
+                            && (position.y - location.y).abs() < DOUBLE_CLICK_DISTANCE
+                    })
+                    .unwrap_or(false);
+                self.last_titlebar_click = Some((now, location));
+
+                if double_click {
+                    self.last_titlebar_click = None;
+                    shell::toggle_maximized(&mut self.space, &hit.window);
+                    self.request_redraw();
+                    return true;
+                }
+
+                let grab = MoveSurfaceGrab {
+                    start_data: grabs::start_data_at(location, button),
+                    window: hit.window.clone(),
+                    initial_window_location: hit.content_location,
+                };
+                self.seat
+                    .get_pointer()
+                    .unwrap()
+                    .set_grab(self, grab, serial, Focus::Clear);
+                true
+            }
+            FramePart::Edge(edge) => {
+                if button != BTN_LEFT {
+                    return true;
+                }
+
+                let grab = ResizeSurfaceGrab::start(
+                    grabs::start_data_at(location, button),
+                    hit.window.clone(),
+                    edge,
+                    Rectangle::new(hit.content_location, hit.content_size),
+                );
+                self.seat
+                    .get_pointer()
+                    .unwrap()
+                    .set_grab(self, grab, serial, Focus::Clear);
+                true
+            }
+        }
+    }
+
+    /// Resolve a titlebar button press. Returns `true` when the frame consumed
+    /// the release.
+    fn frame_button_released(&mut self, button: u32) -> bool {
+        let Some((window, pressed)) = self.frame_press.take() else {
+            return false;
+        };
+
+        let hovered = decor::state(&window).hover;
+        decor::state_mut(&window).pressed = None;
+        self.request_redraw();
+
+        if button == BTN_LEFT && hovered == Some(pressed) {
+            match pressed {
+                FrameButton::Close => {
+                    if let Some(toplevel) = window.toplevel() {
+                        toplevel.send_close();
+                    }
+                }
+                FrameButton::Maximize => shell::toggle_maximized(&mut self.space, &window),
+            }
+        }
+        true
+    }
+
+    /// Track which titlebar button the pointer is over, for hover states.
+    fn update_frame_hover(&mut self) {
+        let hit = decor::hit_test(&self.space, self.pointer_location);
+        let (hovered_window, hovered_button) = match &hit {
+            Some(hit) => match hit.part {
+                FramePart::Button(button) => (Some(hit.window.clone()), Some(button)),
+                _ => (None, None),
+            },
+            None => (None, None),
+        };
+
+        let mut changed = false;
+        for window in self.space.elements() {
+            let want = if Some(window) == hovered_window.as_ref() {
+                hovered_button
+            } else {
+                None
+            };
+            let mut frame = decor::state_mut(window);
+            if frame.hover != want {
+                frame.hover = want;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.request_redraw();
+        }
+    }
+
     fn clear_focus(&mut self, serial: Serial) {
         for window in self.space.elements() {
+            decor::state_mut(window).active = false;
             let Some(toplevel) = window.toplevel() else {
                 continue;
             };

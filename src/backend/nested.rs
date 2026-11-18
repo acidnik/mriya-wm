@@ -9,7 +9,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use smithay::{
     backend::{
-        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportMemWl},
+        renderer::{
+            damage::OutputDamageTracker, element::AsRenderElements, gles::GlesRenderer, ImportMemWl,
+        },
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     input::pointer::CursorImageStatus,
@@ -21,11 +23,11 @@ use smithay::{
             window::Window as WinitWindow,
         },
     },
-    utils::{Physical, Size, Transform},
+    utils::{Physical, Scale, Size, Transform},
 };
 use tracing::info;
 
-use crate::{backend::element::NestedRenderElement, cursor::Cursor, Mriya};
+use crate::{backend::element::NestedRenderElement, cursor::Cursor, decor, Mriya};
 
 /// Colour of the "desktop" behind all windows.
 const BACKGROUND: [f32; 4] = [0.11, 0.11, 0.13, 1.0];
@@ -164,28 +166,53 @@ impl NestedRenderer {
 
         let damage = {
             let (renderer, mut framebuffer) = self.graphics.bind()?;
+            let output_scale = Scale::from(scale);
 
-            let cursor_elements =
-                self.cursor
-                    .render_elements(renderer, cursor_position, scale, &cursor_status);
+            let active_window = state.focused_window();
+            let mut elements: Vec<NestedRenderElement<GlesRenderer>> =
+                Vec::with_capacity(state.space.elements().len() * 4 + 1);
 
-            let result = smithay::desktop::space::render_output::<
-                _,
-                NestedRenderElement<GlesRenderer>,
-                _,
-                _,
-            >(
-                &self.output,
+            // Collected bottom to top (frame below its client content, windows
+            // in stacking order); the damage tracker wants front to back, so the
+            // list is reversed at the end.
+            for window in state.space.elements_for_output(&self.output) {
+                let Some(content_location) = state.space.element_location(window) else {
+                    continue;
+                };
+
+                elements.extend(decor::render::elements(
+                    window,
+                    content_location,
+                    window.geometry().size,
+                    active_window.as_ref() == Some(window),
+                    output_scale,
+                ));
+                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
+                    NestedRenderElement<GlesRenderer>,
+                >(
+                    window,
+                    renderer,
+                    content_location.to_physical_precise_round(output_scale),
+                    output_scale,
+                    1.0,
+                ));
+            }
+
+            elements.extend(self.cursor.render_elements(
                 renderer,
-                &mut framebuffer,
-                1.0,
-                age,
-                [&state.space],
-                &cursor_elements,
-                &mut self.damage_tracker,
-                BACKGROUND,
-            )
-            .map_err(|err| anyhow!("render error: {err}"))?;
+                cursor_position,
+                scale,
+                &cursor_status,
+            ));
+
+            // OutputDamageTracker draws the list back to front: the last
+            // element of the slice ends up at the very bottom.
+            elements.reverse();
+
+            let result = self
+                .damage_tracker
+                .render_output(renderer, &mut framebuffer, age, &elements, BACKGROUND)
+                .map_err(|err| anyhow!("render error: {err}"))?;
 
             result.damage.cloned()
         };

@@ -27,6 +27,7 @@ use smithay::{
 };
 
 use crate::{
+    decor::{self, FrameGeometry},
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
     shell,
     state::Mriya,
@@ -39,9 +40,26 @@ impl XdgShellHandler for Mriya {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
-        let location = shell::location_for_new_window(&self.space);
+        // The frame is drawn around the content area, so the cascade position
+        // applies to the frame and the content moves inside it.
+        let content_offset = FrameGeometry::of(&decor::state(&window)).content_offset();
+        let location = shell::location_for_new_window(&self.space) + content_offset;
         self.space.map_element(window.clone(), location, false);
         self.focus_window(&window);
+        self.request_redraw();
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for_toplevel(&surface) {
+            decor::state_mut(&window).title = surface_title(&surface);
+        }
+        self.request_redraw();
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for_toplevel(&surface) {
+            decor::state_mut(&window).app_id = surface_app_id(&surface);
+        }
         self.request_redraw();
     }
 
@@ -130,7 +148,7 @@ impl XdgShellHandler for Mriya {
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        match self.window_for(&surface) {
+        match self.window_for_toplevel(&surface) {
             Some(window) => shell::set_maximized(&mut self.space, &window, true),
             None => {
                 surface.send_configure();
@@ -140,7 +158,7 @@ impl XdgShellHandler for Mriya {
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        match self.window_for(&surface) {
+        match self.window_for_toplevel(&surface) {
             Some(window) => shell::set_maximized(&mut self.space, &window, false),
             None => {
                 surface.send_configure();
@@ -154,7 +172,7 @@ impl XdgShellHandler for Mriya {
         surface: ToplevelSurface,
         _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
     ) {
-        match self.window_for(&surface) {
+        match self.window_for_toplevel(&surface) {
             Some(window) => shell::set_fullscreen(&mut self.space, &window, true),
             None => {
                 surface.send_configure();
@@ -164,7 +182,7 @@ impl XdgShellHandler for Mriya {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        match self.window_for(&surface) {
+        match self.window_for_toplevel(&surface) {
             Some(window) => shell::set_fullscreen(&mut self.space, &window, false),
             None => {
                 surface.send_configure();
@@ -183,7 +201,7 @@ impl XdgShellHandler for Mriya {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.window_for(&surface) {
+        if let Some(window) = self.window_for_toplevel(&surface) {
             self.space.unmap_elem(&window);
         }
         self.request_redraw();
@@ -193,18 +211,6 @@ impl XdgShellHandler for Mriya {
 delegate_xdg_shell!(Mriya);
 
 impl Mriya {
-    fn window_for(&self, surface: &ToplevelSurface) -> Option<Window> {
-        self.space
-            .elements()
-            .find(|window| {
-                window
-                    .toplevel()
-                    .map(|toplevel| toplevel.wl_surface() == surface.wl_surface())
-                    .unwrap_or(false)
-            })
-            .cloned()
-    }
-
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
@@ -257,6 +263,26 @@ fn check_grab(
     }
 
     Some(start_data)
+}
+
+fn surface_title(surface: &ToplevelSurface) -> String {
+    with_states(surface.wl_surface(), |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|data| data.lock().unwrap().title.clone())
+            .unwrap_or_default()
+    })
+}
+
+fn surface_app_id(surface: &ToplevelSurface) -> String {
+    with_states(surface.wl_surface(), |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|data| data.lock().unwrap().app_id.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// Called on every `WlSurface::commit`.

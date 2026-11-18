@@ -6,7 +6,10 @@
 
 use smithay::{
     backend::renderer::{
-        element::{memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement},
+        element::{
+            memory::MemoryRenderBufferRenderElement, solid::SolidColorRenderElement,
+            surface::WaylandSurfaceRenderElement,
+        },
         ImportAll, ImportMem,
     },
     render_elements,
@@ -19,4 +22,6 @@ render_elements! {
     Surface = WaylandSurfaceRenderElement<R>,
     /// Client-side memory buffers, used for cursors from the XCursor theme.
     Memory = MemoryRenderBufferRenderElement<R>,
+    /// Flat colours, used for the window frame until themes are supported.
+    Solid = SolidColorRenderElement,
 }

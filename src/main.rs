@@ -7,6 +7,7 @@
 mod backend;
 mod config;
 mod cursor;
+mod decor;
 mod grabs;
 mod handlers;
 mod input;

@@ -22,7 +22,7 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        shell::xdg::{decoration::XdgDecorationState, ToplevelSurface, XdgShellState},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -32,6 +32,7 @@ use tracing::debug;
 
 use crate::{
     config::Config,
+    decor::{self, FrameButton},
     keybindings::{Action, Keybindings},
     shell,
     spawn::Spawner,
@@ -59,6 +60,11 @@ pub struct Mriya {
     /// Backend that draws the scene; set once the backend is initialized.
     pub renderer: Option<super::backend::nested::NestedRenderer>,
 
+    /// Window currently holding a titlebar button down.
+    pub frame_press: Option<(Window, FrameButton)>,
+    /// Last titlebar click, for double click to maximize.
+    pub last_titlebar_click: Option<(Instant, Point<f64, Logical>)>,
+
     /// Everything read from `config.kdl`.
     pub config: Config,
     /// Lookup table built from `config.binds`.
@@ -72,6 +78,9 @@ pub struct Mriya {
     // Smithay protocol state.
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    /// Kept alive so the `zxdg_decoration_manager_v1` global is advertised.
+    #[allow(dead_code)]
+    pub xdg_decoration_state: XdgDecorationState,
     pub shm_state: ShmState,
     /// Kept alive so the `zxdg_output_manager_v1` global stays advertised.
     #[allow(dead_code)]
@@ -87,6 +96,7 @@ impl Mriya {
 
         let compositor_state = CompositorState::new::<Self>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<Self>(&display_handle);
+        let xdg_decoration_state = XdgDecorationState::new::<Self>(&display_handle);
         let shm_state = ShmState::new::<Self>(&display_handle, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
@@ -131,12 +141,15 @@ impl Mriya {
             suppressed_keys: Vec::new(),
             needs_redraw: true,
             renderer: None,
+            frame_press: None,
+            last_titlebar_click: None,
             config,
             keybindings,
             spawner,
             binding_keymap,
             compositor_state,
             xdg_shell_state,
+            xdg_decoration_state,
             shm_state,
             output_manager_state,
             seat_state,
@@ -188,6 +201,19 @@ impl Mriya {
         self.popups.cleanup();
         self.spawner.reap();
         self.request_redraw();
+    }
+
+    /// Window that hosts the given toplevel surface.
+    pub fn window_for_toplevel(&self, surface: &ToplevelSurface) -> Option<Window> {
+        self.space
+            .elements()
+            .find(|window| {
+                window
+                    .toplevel()
+                    .map(|toplevel| toplevel.wl_surface() == surface.wl_surface())
+                    .unwrap_or(false)
+            })
+            .cloned()
     }
 
     /// Window actions apply to: the keyboard focus, or the topmost window when
@@ -309,6 +335,7 @@ impl Mriya {
         self.space.raise_element(window, true);
         for other in self.space.elements() {
             let focused = other == window;
+            decor::state_mut(other).active = focused;
             let Some(other_toplevel) = other.toplevel() else {
                 continue;
             };

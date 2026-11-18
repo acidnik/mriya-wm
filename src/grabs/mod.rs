@@ -17,9 +17,17 @@ use crate::state::Mriya;
 /// (e.g. `Mod` + left button), as opposed to a client-initiated one.
 pub fn start_data_for(state: &Mriya, button: u32) -> PointerGrabStartData<Mriya> {
     let location: Point<f64, Logical> = state.pointer_location;
+    start_data_at(location, button)
+}
+
+/// Grab start data for a drag started at `location` by the window manager.
+///
+/// Used when a drag starts on a window frame: there is no client surface under
+/// the pointer there, so the grab has no focus surface.
+pub fn start_data_at(location: Point<f64, Logical>, button: u32) -> PointerGrabStartData<Mriya> {
     PointerGrabStartData {
         button,
         location,
-        focus: state.surface_under(location),
+        focus: None,
     }
 }
