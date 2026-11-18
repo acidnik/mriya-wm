@@ -31,7 +31,11 @@ impl SeatHandler for Mriya {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        tracing::trace!(status = ?image, "cursor image changed");
         self.cursor_status = image;
+        // The cursor is part of the scene, so the next frame has to redraw the
+        // area it left and the area it moved to.
+        self.request_redraw();
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {

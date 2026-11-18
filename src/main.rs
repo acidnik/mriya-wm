@@ -5,6 +5,7 @@
 //! `xdg_wm_base` and `wl_shm`, and display client windows without decorations.
 
 mod backend;
+mod cursor;
 mod grabs;
 mod handlers;
 mod input;

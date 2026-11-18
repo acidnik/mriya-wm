@@ -10,7 +10,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
-            Display, DisplayHandle,
+            Display, DisplayHandle, Resource,
         },
     },
     utils::{Logical, Point, SERIAL_COUNTER},
@@ -43,6 +43,8 @@ pub struct Mriya {
     pub suppressed_keys: Vec<Keysym>,
     /// Set when the scene changed and a new frame has to be drawn.
     pub needs_redraw: bool,
+    /// Backend that draws the scene; set once the backend is initialized.
+    pub renderer: Option<super::backend::nested::NestedRenderer>,
 
     // Smithay protocol state.
     pub compositor_state: CompositorState,
@@ -88,6 +90,7 @@ impl Mriya {
             cursor_status: CursorImageStatus::default_named(),
             suppressed_keys: Vec::new(),
             needs_redraw: true,
+            renderer: None,
             compositor_state,
             xdg_shell_state,
             shm_state,
@@ -125,9 +128,6 @@ impl Mriya {
                         tracing::error!(%err, "failed to dispatch clients");
                         return Ok(PostAction::Continue);
                     }
-                    if let Err(err) = display.flush_clients() {
-                        tracing::error!(%err, "failed to flush clients");
-                    }
                     state.on_dispatch();
                     Ok(PostAction::Continue)
                 },
@@ -144,8 +144,46 @@ impl Mriya {
         self.popups.cleanup();
     }
 
+    /// Send everything we queued for clients.
+    ///
+    /// Composable events are generated from many places (input, rendering,
+    /// focus changes), not only from the Wayland dispatch source, so the flush
+    /// happens once per event loop iteration instead of next to the dispatch.
+    pub fn flush_clients(&mut self) {
+        if let Err(err) = self.display_handle.flush_clients() {
+            tracing::warn!(%err, "failed to flush clients");
+        }
+    }
+
+    /// Mark the scene as dirty and ask the backend for a frame.
+    ///
+    /// Client commits are processed in the Wayland event source, so this is the
+    /// only way a `commit` turns into a painted frame.
     pub fn request_redraw(&mut self) {
         self.needs_redraw = true;
+        if let Some(renderer) = &self.renderer {
+            renderer.request_redraw();
+        }
+    }
+
+    /// Draw one frame. Called by the backend when it wants a new picture.
+    pub fn render_frame(&mut self) {
+        let Some(mut renderer) = self.renderer.take() else {
+            return;
+        };
+        self.needs_redraw = false;
+        if let Err(err) = renderer.draw(self) {
+            tracing::warn!(%err, "failed to render a frame");
+        }
+        self.renderer = Some(renderer);
+    }
+
+    /// Handle a change of the output size reported by the backend.
+    pub fn resize_output(&mut self, size: smithay::utils::Size<i32, smithay::utils::Physical>) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(size);
+        }
+        self.request_redraw();
     }
 
     /// Surface (and its location on screen) below the given position.
@@ -193,6 +231,7 @@ impl Mriya {
             other_toplevel.send_pending_configure();
         }
 
+        tracing::trace!(surface = ?toplevel.wl_surface().id(), "setting keyboard focus");
         self.seat.get_keyboard().unwrap().set_focus(
             self,
             Some(toplevel.wl_surface().clone()),

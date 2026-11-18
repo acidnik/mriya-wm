@@ -12,7 +12,7 @@ use smithay::{
         keyboard::{FilterResult, Keysym},
         pointer::{AxisFrame, ButtonEvent, Focus, MotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
 };
 
@@ -128,6 +128,7 @@ impl Mriya {
     }
 
     fn pointer_motion_to(&mut self, pos: Point<f64, Logical>, time: u32) {
+        tracing::trace!(?pos, "pointer motion");
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
 
@@ -217,6 +218,12 @@ impl Mriya {
     ) -> Option<KeyAction> {
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
+        tracing::trace!(
+            ?state,
+            keycode = u32::from(keycode),
+            focus = ?keyboard.current_focus().map(|surface| format!("{:?}", surface.id())),
+            "key event"
+        );
         let mut suppressed: Vec<Keysym> = std::mem::take(&mut self.suppressed_keys);
 
         let action = keyboard.input(
@@ -227,6 +234,7 @@ impl Mriya {
             time,
             |_, modifiers, handle| {
                 let keysym = handle.modified_sym();
+                tracing::trace!(keysym = ?keysym, ?modifiers, "input filter");
                 match state {
                     KeyState::Pressed => match keybindings::action_for(*modifiers, keysym) {
                         Some(action) => {
