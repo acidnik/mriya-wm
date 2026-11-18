@@ -398,6 +398,10 @@ impl Mriya {
             }
             Action::Spawn(argv) => self.spawner.spawn(&argv),
             Action::SpawnShell(command) => self.spawner.spawn_shell(&command),
+            Action::SpawnTerminal => match crate::spawn::default_terminal() {
+                Some(argv) => self.spawner.spawn(&argv),
+                None => debug!("no terminal found for spawn-terminal"),
+            },
         }
     }
 

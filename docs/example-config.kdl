@@ -78,7 +78,13 @@ binds {
     Mod+q { close-window; }
     Mod+Escape { quit; }
 
-    Mod+Return { spawn "foot"; }
+    // `spawn-terminal` starts $TERMINAL, or the first of
+    // foot/ghostty/kitty/wezterm/alacritty/xfce4-terminal/xterm in PATH.
+    Mod+Return { spawn-terminal; }
+
+    // Launchers like fuzzel/rofi need wlr-layer-shell, which Mriya does not
+    // implement yet; a normal window works in the meantime.
+    Mod+R { spawn "xfce4-appfinder"; }
     Mod+Shift+Return { spawn-sh "foot -e htop"; }
 
     // Toggle the focused window between floating, maximized and fullscreen.

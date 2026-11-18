@@ -2,6 +2,7 @@
 
 use std::{
     env,
+    path::PathBuf,
     process::{Child, Command},
 };
 
@@ -77,6 +78,45 @@ impl Spawner {
     }
 }
 
+/// Terminals tried by `spawn-terminal`, in order of preference.
+const TERMINALS: [&str; 7] = [
+    "foot",
+    "ghostty",
+    "kitty",
+    "wezterm",
+    "alacritty",
+    "xfce4-terminal",
+    "xterm",
+];
+
+/// Command for `spawn-terminal`: `$TERMINAL` when set, otherwise the first known
+/// terminal found in `PATH`.
+pub fn default_terminal() -> Option<Vec<String>> {
+    if let Ok(terminal) = env::var("TERMINAL") {
+        let mut words = terminal.split_whitespace().map(str::to_string);
+        if let Some(program) = words.next() {
+            return Some(std::iter::once(program).chain(words).collect());
+        }
+    }
+
+    let search_path: Vec<PathBuf> = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect())
+        .unwrap_or_default();
+    find_terminal(&search_path).map(|program| vec![program])
+}
+
+/// First terminal from [`TERMINALS`] present in one of `search_path`.
+fn find_terminal(search_path: &[PathBuf]) -> Option<String> {
+    TERMINALS
+        .iter()
+        .find(|program| {
+            search_path
+                .iter()
+                .any(|directory| directory.join(program).is_file())
+        })
+        .map(|program| (*program).to_string())
+}
+
 /// `~` at the start of a program path means the home directory, like in niri.
 fn expand_home(program: &str) -> String {
     if let Some(rest) = program.strip_prefix("~/") {
@@ -88,4 +128,21 @@ fn expand_home(program: &str) -> String {
         }
     }
     program.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_a_terminal_in_the_search_path() {
+        let dir = env::temp_dir().join(format!("mriya-tty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kitty"), b"#!/bin/sh\n").unwrap();
+
+        assert_eq!(find_terminal(&[dir.clone()]), Some("kitty".to_string()));
+        assert_eq!(find_terminal(&[]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

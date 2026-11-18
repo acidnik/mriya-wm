@@ -52,6 +52,8 @@ pub enum Action {
     Spawn(Vec<String>),
     /// Run a command line through `sh -c`.
     SpawnShell(String),
+    /// Start the default terminal (`$TERMINAL` or the first one found in `PATH`).
+    SpawnTerminal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +93,9 @@ impl Default for Keybindings {
 pub fn default_binds() -> Vec<Binding> {
     let alias = ModAlias::Alt;
     [
+        // A terminal is the way to start anything else, so it works out of the
+        // box, even without a config file.
+        ("Mod+Return", Action::SpawnTerminal),
         ("Mod+q", Action::CloseWindow),
         ("Mod+Escape", Action::Quit),
         ("Mod+f", Action::FullscreenWindow),
@@ -179,6 +184,7 @@ pub fn parse_action(node: &KdlNode) -> Result<Action, String> {
                 Ok(Action::Spawn(argv))
             }
         }
+        "spawn-terminal" => Ok(Action::SpawnTerminal),
         "spawn-sh" => match string_args(node).first() {
             Some(command) => Ok(Action::SpawnShell(command.clone())),
             None => Err("spawn-sh without a command".to_string()),

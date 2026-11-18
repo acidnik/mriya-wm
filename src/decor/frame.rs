@@ -428,6 +428,7 @@ pub fn build(
         });
     }
 
+    trace!(app_id = %state.app_id, title = %state.title, "frame text and icon");
     let placed: Vec<char> = buttons
         .buttons
         .iter()
