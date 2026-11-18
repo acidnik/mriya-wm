@@ -134,6 +134,13 @@ pub struct NestedRenderer {
 }
 
 impl NestedRenderer {
+    /// Replace the cursor theme/size after a config reload.
+    pub fn reload_cursor(&mut self, config: &crate::config::CursorConfig) {
+        self.cursor = Cursor::new(config);
+        // Re-apply cursor visibility on the next frame.
+        self.host_cursor_visible = None;
+    }
+
     /// Ask the host compositor for another frame.
     pub fn request_redraw(&self) {
         self.graphics.window().request_redraw();

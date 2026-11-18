@@ -6,6 +6,7 @@
 
 mod backend;
 mod config;
+mod config_watch;
 mod cursor;
 mod decor;
 mod grabs;
@@ -39,7 +40,7 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let config = load_config(&args);
+    let (config, config_path) = load_config(&args);
 
     // niri-compatible: `environment { ... }` is exported to the session and to
     // every client we start.
@@ -50,6 +51,7 @@ fn main() -> Result<()> {
     let mut event_loop: EventLoop<Mriya> = EventLoop::try_new()?;
     let display: Display<Mriya> = Display::new()?;
     let mut state = Mriya::new(&mut event_loop, display, config);
+    state.config_path = config_path.clone();
 
     info!(socket = %state.socket_name.to_string_lossy(), "Mriya WM is ready");
 
@@ -58,6 +60,12 @@ fn main() -> Result<()> {
     }
     for command in state.config.spawn_at_startup.clone() {
         state.spawner.spawn_config(&command);
+    }
+
+    if let Some(path) = &config_path {
+        if let Err(err) = config_watch::watch(&mut event_loop, path) {
+            config_watch::warn_unwatched(path, &err);
+        }
     }
 
     backend::nested::run(event_loop, state)
@@ -71,7 +79,7 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
-fn load_config(args: &Args) -> Config {
+fn load_config(args: &Args) -> (Config, Option<PathBuf>) {
     // `Mod` is Alt while nested: the session we run in usually binds Super.
     let mod_alias = ModAlias::Alt;
     let path = args.config.clone().or_else(config::default_path);
@@ -82,9 +90,9 @@ fn load_config(args: &Args) -> Config {
             if !explicit.exists() {
                 tracing::warn!(path = %explicit.display(), "--config points at a missing file");
             }
-            config
+            (config, Some(explicit.clone()))
         }
-        None => config::load_or_default(path.as_deref(), mod_alias),
+        None => (config::load_or_default(path.as_deref(), mod_alias), path),
     }
 }
 

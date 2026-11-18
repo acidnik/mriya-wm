@@ -75,6 +75,10 @@ pub struct Mriya {
     pub text: crate::decor::text::TextRenderer,
     /// Application icons for window titles.
     pub icons: crate::decor::icons::IconCache,
+    /// Path the config was loaded from, watched for changes.
+    pub config_path: Option<std::path::PathBuf>,
+    /// `Mod` alias resolved for this backend, needed to re-parse the config.
+    pub mod_alias: crate::keybindings::ModAlias,
     /// Everything read from `config.kdl`.
     pub config: Config,
     /// Lookup table built from `config.binds`.
@@ -159,6 +163,8 @@ impl Mriya {
             theme,
             text,
             icons,
+            config_path: None,
+            mod_alias: crate::keybindings::ModAlias::Alt,
             config,
             keybindings,
             spawner,
@@ -247,6 +253,72 @@ impl Mriya {
         self.popups.cleanup();
         self.spawner.reap();
         self.request_redraw();
+    }
+
+    /// Re-read the config file and apply it. Called from the inotify source.
+    pub fn reload_config(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let Some(config) = crate::config::reload(&path, self.mod_alias) else {
+            return;
+        };
+        self.apply_config(config);
+    }
+
+    /// Apply a freshly loaded configuration without restarting anything.
+    ///
+    /// Everything except `spawn-at-startup` takes effect immediately:
+    /// `spawn-at-startup` only runs once, at compositor start.
+    pub fn apply_config(&mut self, config: Config) {
+        for (name, value) in &config.environment {
+            std::env::set_var(name, value);
+        }
+
+        self.keybindings = Keybindings::new(config.binds.clone());
+        self.rebuild_keyboard(&config);
+
+        if let Some(renderer) = &mut self.renderer {
+            renderer.reload_cursor(&config.cursor);
+        }
+
+        let previous = self.theme.as_ref().map(theme_fingerprint);
+        self.theme = Self::load_theme(&config);
+        let current = self.theme.as_ref().map(theme_fingerprint);
+        self.config = config;
+
+        if previous != current {
+            // Frame textures were built with the old theme.
+            self.invalidate_frames();
+        }
+
+        for window in self.space.elements().cloned().collect::<Vec<_>>() {
+            self.apply_window_rules(&window);
+        }
+        self.request_redraw();
+    }
+
+    /// Drop cached frame textures of every window, so they are rebuilt with the
+    /// current theme and title.
+    fn invalidate_frames(&mut self) {
+        for window in self.space.elements() {
+            if let Some(cache) = window
+                .user_data()
+                .get::<std::cell::RefCell<Option<crate::decor::frame::CachedFrame>>>()
+            {
+                *cache.borrow_mut() = None;
+            }
+        }
+    }
+
+    /// Recreate the seat keyboard with the configured layout and repeat rate.
+    fn rebuild_keyboard(&mut self, config: &Config) {
+        let xkb = config.keyboard.xkb.to_smithay();
+        let repeat_delay = config.keyboard.repeat_delay.unwrap_or(200) as i32;
+        let repeat_rate = config.keyboard.repeat_rate.unwrap_or(25) as i32;
+        if let Err(err) = self.seat.add_keyboard(xkb, repeat_delay, repeat_rate) {
+            tracing::warn!(%err, "failed to apply the keyboard configuration");
+        }
     }
 
     /// Re-evaluate `window-rule`s for a window whose title or app-id changed.
@@ -449,4 +521,11 @@ pub struct ClientState {
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// Cheap identity of a theme for change detection: the name and the parameters
+/// it was composed with (the images themselves are large and would be slow to
+/// compare pixel by pixel).
+fn theme_fingerprint(theme: &Theme) -> (String, crate::decor::theme::ThemeParams) {
+    (theme.name.clone(), theme.params.clone())
 }

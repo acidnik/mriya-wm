@@ -179,6 +179,29 @@ pub fn load_or_default(path: Option<&Path>, mod_alias: ModAlias) -> Config {
     }
 }
 
+/// Load a config for a *reload*: unlike [`load_or_default`] a broken file keeps
+/// the running configuration instead of silently falling back to defaults.
+pub fn reload(path: &Path, mod_alias: ModAlias) -> Option<Config> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            warn!(path = %path.display(), %err, "cannot read the config, keeping the current one");
+            return None;
+        }
+    };
+
+    match parse(&text, mod_alias) {
+        Ok(config) => {
+            info!(path = %path.display(), "config reloaded");
+            Some(config)
+        }
+        Err(err) => {
+            warn!(path = %path.display(), %err, "config is invalid, keeping the current one");
+            None
+        }
+    }
+}
+
 /// Parse config text. niri configs are KDL v1, so parse that dialect.
 pub fn parse(text: &str, mod_alias: ModAlias) -> Result<Config, kdl::KdlError> {
     let document = KdlDocument::parse_v1(text)?;
