@@ -140,6 +140,45 @@ impl Canvas {
         }
     }
 
+    /// Draw `source` scaled into a `width`x`height` rectangle (bilinear).
+    pub(crate) fn blit_scaled(
+        &mut self,
+        source: &ThemeImage,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        if source.width <= 0 || source.height <= 0 || width <= 0 || height <= 0 {
+            return;
+        }
+        for dy in 0..height {
+            let sy = (dy as f64 + 0.5) * source.height as f64 / height as f64 - 0.5;
+            let top = sy.floor().max(0.0) as i32;
+            let bottom = (top + 1).min(source.height - 1);
+            let ry = (sy - top as f64).clamp(0.0, 1.0);
+            for dx in 0..width {
+                let sx = (dx as f64 + 0.5) * source.width as f64 / width as f64 - 0.5;
+                let left = sx.floor().max(0.0) as i32;
+                let right = (left + 1).min(source.width - 1);
+                let rx = (sx - left as f64).clamp(0.0, 1.0);
+
+                let sample = |xx: i32, yy: i32| source.pixel(xx, yy);
+                let top_left = sample(left, top);
+                let top_right = sample(right, top);
+                let bottom_left = sample(left, bottom);
+                let bottom_right = sample(right, bottom);
+
+                let blend = |a: Option<Rgba>, b: Option<Rgba>, t: f64| mix(a, b, t);
+                let upper = blend(top_left, top_right, rx);
+                let lower = blend(bottom_left, bottom_right, rx);
+                if let Some(color) = mix_rgba(upper, lower, ry) {
+                    self.blend(x + dx, y + dy, color);
+                }
+            }
+        }
+    }
+
     /// Upload as a texture, premultiplied in the byte order `Argb8888` expects.
     pub(crate) fn to_buffer(&self) -> MemoryRenderBuffer {
         let mut bytes = Vec::with_capacity(self.pixels.len());
@@ -177,6 +216,17 @@ impl Canvas {
             bits,
         }
     }
+}
+
+pub(crate) fn mix_rgba(from: Option<[u8; 4]>, to: Option<[u8; 4]>, ratio: f64) -> Option<[u8; 4]> {
+    let (from, to) = (from?, to?);
+    let mut out = [0u8; 4];
+    for channel in 0..4 {
+        let a = f64::from(from[channel]);
+        let b = f64::from(to[channel]);
+        out[channel] = (a + (b - a) * ratio).round().clamp(0.0, 255.0) as u8;
+    }
+    Some(out)
 }
 
 pub(crate) fn mix(from: Option<Rgba>, to: Option<Rgba>, ratio: f64) -> Option<[u8; 4]> {

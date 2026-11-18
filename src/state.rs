@@ -73,6 +73,8 @@ pub struct Mriya {
     pub theme: Option<Theme>,
     /// Font system and glyph cache for window titles.
     pub text: crate::decor::text::TextRenderer,
+    /// Application icons for window titles.
+    pub icons: crate::decor::icons::IconCache,
     /// Everything read from `config.kdl`.
     pub config: Config,
     /// Lookup table built from `config.binds`.
@@ -123,6 +125,7 @@ impl Mriya {
         let loop_signal = event_loop.get_signal();
         let theme = Self::load_theme(&config);
         let text = crate::decor::text::TextRenderer::new();
+        let icons = crate::decor::icons::IconCache::new();
         let spawner = Spawner::new(socket_name.to_string_lossy().into_owned());
         let keybindings = Keybindings::new(config.binds.clone());
         let binding_keymap = {
@@ -155,6 +158,7 @@ impl Mriya {
             last_titlebar_click: None,
             theme,
             text,
+            icons,
             config,
             keybindings,
             spawner,

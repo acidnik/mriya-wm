@@ -216,8 +216,13 @@ impl Mriya {
         serial: Serial,
         location: Point<f64, Logical>,
     ) -> bool {
-        let Some(hit) = decor::hit_test(self.theme.as_ref(), &mut self.text, &self.space, location)
-        else {
+        let Some(hit) = decor::hit_test(
+            self.theme.as_ref(),
+            &mut self.text,
+            &mut self.icons,
+            &self.space,
+            location,
+        ) else {
             return false;
         };
         if hit.part == FramePart::Content {
@@ -323,6 +328,7 @@ impl Mriya {
         let hit = decor::hit_test(
             self.theme.as_ref(),
             &mut self.text,
+            &mut self.icons,
             &self.space,
             self.pointer_location,
         );

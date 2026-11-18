@@ -13,6 +13,7 @@ use tracing::trace;
 
 use super::{
     canvas::{AlphaMask, Canvas},
+    icons::IconCache,
     text::TextRenderer,
     theme::{palette::Rgba, Theme, ThemeImage},
     FrameButton, FrameGeometry, FrameState,
@@ -102,7 +103,11 @@ fn frame_silhouette(
 }
 
 /// Downscale, blur and fade the silhouette into a shadow texture.
-fn build_shadow(silhouette: &Canvas, opacity: u8) -> Option<ShadowTexture> {
+fn build_shadow(
+    silhouette: &Canvas,
+    opacity: u8,
+    deltas: (i32, i32, i32, i32),
+) -> Option<ShadowTexture> {
     if opacity == 0 || silhouette.width <= 0 || silhouette.height <= 0 {
         return None;
     }
@@ -152,9 +157,19 @@ fn build_shadow(silhouette: &Canvas, opacity: u8) -> Option<ShadowTexture> {
         "shadow composed"
     );
 
+    // xfwm4 draws the shadow at `SHADOW_OFFSET + delta` with the size
+    // `frame + gaussian - delta_width - delta`, where its gaussian padding plays
+    // the role of our `radius * scale` padding.
+    let (delta_x, delta_y, delta_width, delta_height) = deltas;
+    let padding = radius * scale;
+    let frame_width = silhouette.width;
+    let frame_height = silhouette.height;
     Some(ShadowTexture {
-        offset: (-radius * scale, -radius * scale),
-        draw_size: (stride * scale, (height + 2 * radius) * scale),
+        offset: (delta_x - padding, delta_y - padding),
+        draw_size: (
+            (frame_width + 2 * padding - delta_width - delta_x).max(1),
+            (frame_height + 2 * padding - delta_height - delta_y).max(1),
+        ),
         buffer: canvas.to_buffer(),
     })
 }
@@ -261,6 +276,8 @@ pub struct FrameKey {
     pub pressed: Option<FrameButton>,
     /// Title text is rendered into the titlebar texture.
     pub title: String,
+    /// The application icon depends on it.
+    pub app_id: String,
 }
 
 /// A composed frame kept in the window user data.
@@ -276,6 +293,7 @@ pub fn textures<'a>(
     window: &'a smithay::desktop::Window,
     theme: &Theme,
     text: &mut TextRenderer,
+    icons: &mut IconCache,
     state: &FrameState,
     content_size: smithay::utils::Size<i32, smithay::utils::Logical>,
     geometry: FrameGeometry,
@@ -299,6 +317,7 @@ pub fn textures<'a>(
         hover: state.hover,
         pressed: state.pressed,
         title: state.title.clone(),
+        app_id: state.app_id.clone(),
     };
 
     // Rebuild outside of the borrow of `cell` to keep `state` readable while
@@ -309,7 +328,14 @@ pub fn textures<'a>(
         .map(|cached| cached.key != key)
         .unwrap_or(true);
     if needs_build {
-        let textures = build(theme, text, state, (outer_size.w, outer_size.h), geometry);
+        let textures = build(
+            theme,
+            text,
+            icons,
+            state,
+            (outer_size.w, outer_size.h),
+            geometry,
+        );
         *cell.borrow_mut() = Some(CachedFrame { key, textures });
     }
 
@@ -325,6 +351,7 @@ pub fn textures<'a>(
 pub fn build(
     theme: &Theme,
     text: &mut TextRenderer,
+    icons: &mut IconCache,
     state: &FrameState,
     outer_size: (i32, i32),
     geometry: FrameGeometry,
@@ -353,6 +380,16 @@ pub fn build(
         (buttons.left_end - strip_x).max(0),
         (width - buttons.right_start + strip_x).max(0),
     );
+
+    if theme.params.show_app_icon && theme.params.button_layout.contains('O') {
+        if let Some(icon) = icons.get(&state.app_id) {
+            let height = (geometry.top - 6).max(8);
+            let side = height.min(geometry.top - 2);
+            let x = geometry.left + theme.params.button_offset + 2;
+            let y = ((geometry.top - side) / 2).max(0);
+            titlebar_canvas.blit_scaled(&icon, x, y, side, side);
+        }
+    }
 
     for (button, rect) in &buttons.buttons {
         if let Some(image) = button_image(theme, state, *button) {
@@ -415,7 +452,16 @@ pub fn build(
         (width, height),
         geometry,
     );
-    let shadow = build_shadow(&silhouette, theme.params.shadow_opacity);
+    let shadow = build_shadow(
+        &silhouette,
+        theme.params.shadow_opacity,
+        (
+            theme.params.shadow_delta_x,
+            theme.params.shadow_delta_y,
+            theme.params.shadow_delta_width,
+            theme.params.shadow_delta_height,
+        ),
+    );
 
     FrameTextures {
         shadow,
@@ -706,7 +752,15 @@ mod tests {
             bottom: 5,
         };
         let mut text = TextRenderer::new();
-        let textures = build(&theme, &mut text, &state(), (200, 100), geometry);
+        let mut icons = IconCache::new();
+        let textures = build(
+            &theme,
+            &mut text,
+            &mut icons,
+            &state(),
+            (200, 100),
+            geometry,
+        );
         // The texture covers the whole frame width; corners sit on top of it.
         assert_eq!(textures.titlebar_mask.width, 200);
         assert_eq!(textures.titlebar_mask.height, 20);
@@ -723,7 +777,15 @@ mod tests {
             bottom: 5,
         };
         let mut text = TextRenderer::new();
-        let textures = build(&theme, &mut text, &state(), (200, 100), geometry);
+        let mut icons = IconCache::new();
+        let textures = build(
+            &theme,
+            &mut text,
+            &mut icons,
+            &state(),
+            (200, 100),
+            geometry,
+        );
 
         assert!(!frame_opaque(&textures, geometry, (200, 100), 0, 0));
         assert!(frame_opaque(&textures, geometry, (200, 100), 3, 3));

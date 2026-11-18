@@ -170,6 +170,7 @@ impl NestedRenderer {
 
             let active_window = state.focused_window();
             let text = &mut state.text;
+            let icons = &mut state.icons;
             let mut elements: Vec<NestedRenderElement<GlesRenderer>> =
                 Vec::with_capacity(state.space.elements().len() * 4 + 1);
 
@@ -185,6 +186,7 @@ impl NestedRenderer {
                     renderer,
                     state.theme.as_ref(),
                     text,
+                    icons,
                     window,
                     content_location,
                     window.geometry().size,

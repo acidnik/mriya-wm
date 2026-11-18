@@ -11,6 +11,7 @@
 
 pub mod canvas;
 pub mod frame;
+pub mod icons;
 pub mod protocol;
 pub mod render;
 pub mod text;
@@ -373,6 +374,7 @@ pub fn button_rects(
 pub fn hit_test(
     theme: Option<&Theme>,
     text: &mut text::TextRenderer,
+    icons: &mut icons::IconCache,
     space: &Space<Window>,
     position: Point<f64, Logical>,
 ) -> Option<FrameHit> {
@@ -412,7 +414,8 @@ pub fn hit_test(
             }) {
                 FramePart::Button(*button)
             } else {
-                let cache = frame::textures(window, theme, text, &frame, content.size, geometry);
+                let cache =
+                    frame::textures(window, theme, text, icons, &frame, content.size, geometry);
                 let local_x = (position.x - outer.loc.x as f64) as i32;
                 let local_y = (position.y - outer.loc.y as f64) as i32;
                 if !frame::frame_opaque(
