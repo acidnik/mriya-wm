@@ -1,0 +1,267 @@
+//! Input event processing.
+//!
+//! The nested backend forwards whatever the host session gives us; for the
+//! pointer that means absolute positions inside our window.
+
+use smithay::{
+    backend::input::{
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
+        KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
+    },
+    input::{
+        keyboard::{FilterResult, Keysym},
+        pointer::{AxisFrame, ButtonEvent, Focus, MotionEvent},
+    },
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    utils::{Logical, Point, Serial, SERIAL_COUNTER},
+};
+
+use crate::{
+    grabs::{self, MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
+    keybindings::{self, KeyAction},
+    state::Mriya,
+};
+
+/// Left mouse button (linux/input-event-codes.h).
+const BTN_LEFT: u32 = 0x110;
+/// Right mouse button (linux/input-event-codes.h).
+const BTN_RIGHT: u32 = 0x111;
+
+impl Mriya {
+    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        match event {
+            InputEvent::Keyboard { event, .. } => {
+                let time = Event::time_msec(&event);
+                if let Some(action) =
+                    self.keyboard_key_to_action(event.key_code(), event.state(), time)
+                {
+                    self.handle_key_action(action);
+                }
+            }
+            InputEvent::PointerMotionAbsolute { event, .. } => {
+                let Some(output) = self.space.outputs().next().cloned() else {
+                    return;
+                };
+                let Some(output_geo) = self.space.output_geometry(&output) else {
+                    return;
+                };
+
+                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
+                self.pointer_motion_to(pos, event.time_msec());
+            }
+            // Relative motion only matters for the winit backend when the host
+            // sends it; the pointer position comes from absolute events there.
+            InputEvent::PointerMotion { .. } => {}
+            InputEvent::PointerButton { event, .. } => {
+                let serial = SERIAL_COUNTER.next_serial();
+                let pointer = self.seat.get_pointer().unwrap();
+                let keyboard = self.seat.get_keyboard().unwrap();
+                let button = event.button_code();
+                let button_state = event.state();
+                let location = pointer.current_location();
+
+                if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
+                    let modifiers = keyboard.modifier_state();
+                    if modifiers.logo && self.start_wm_grab(button, serial) {
+                        pointer.frame(self);
+                        return;
+                    }
+
+                    if let Some((window, _)) = self.window_under(location) {
+                        self.focus_window(&window);
+                    } else {
+                        self.clear_focus(serial);
+                    }
+                }
+
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        button,
+                        state: button_state,
+                        serial,
+                        time: event.time_msec(),
+                    },
+                );
+                pointer.frame(self);
+            }
+            InputEvent::PointerAxis { event, .. } => {
+                let source = event.source();
+
+                let horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
+                    event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.
+                });
+                let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
+                    event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.
+                });
+                let horizontal_amount_discrete = event.amount_v120(Axis::Horizontal);
+                let vertical_amount_discrete = event.amount_v120(Axis::Vertical);
+
+                let mut frame = AxisFrame::new(event.time_msec()).source(source);
+                if horizontal_amount != 0.0 {
+                    frame = frame.value(Axis::Horizontal, horizontal_amount);
+                    if let Some(discrete) = horizontal_amount_discrete {
+                        frame = frame.v120(Axis::Horizontal, discrete as i32);
+                    }
+                }
+                if vertical_amount != 0.0 {
+                    frame = frame.value(Axis::Vertical, vertical_amount);
+                    if let Some(discrete) = vertical_amount_discrete {
+                        frame = frame.v120(Axis::Vertical, discrete as i32);
+                    }
+                }
+                if source == AxisSource::Finger {
+                    if event.amount(Axis::Horizontal) == Some(0.0) {
+                        frame = frame.stop(Axis::Horizontal);
+                    }
+                    if event.amount(Axis::Vertical) == Some(0.0) {
+                        frame = frame.stop(Axis::Vertical);
+                    }
+                }
+
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.axis(self, frame);
+                pointer.frame(self);
+            }
+            _ => {}
+        }
+    }
+
+    fn pointer_motion_to(&mut self, pos: Point<f64, Logical>, time: u32) {
+        let serial = SERIAL_COUNTER.next_serial();
+        let pointer = self.seat.get_pointer().unwrap();
+
+        self.pointer_location = pos;
+        // Re-resolve the surface under the pointer: the pointer may have a grab,
+        // in which case the grab decides how focus changes.
+        let under = self.surface_under(pos);
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location: pos,
+                serial,
+                time,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    /// Start a `Mod`-initiated move or resize grab. Returns `true` when a grab
+    /// was started (and the button must not reach the client).
+    fn start_wm_grab(&mut self, button: u32, serial: Serial) -> bool {
+        let location = self.pointer_location;
+        let Some((window, window_location)) = self.window_under(location) else {
+            return false;
+        };
+
+        self.focus_window(&window);
+        let start_data = grabs::start_data_for(self, button);
+
+        match button {
+            BTN_LEFT => {
+                let grab = MoveSurfaceGrab {
+                    start_data,
+                    window,
+                    initial_window_location: window_location,
+                };
+                self.seat
+                    .get_pointer()
+                    .unwrap()
+                    .set_grab(self, grab, serial, Focus::Clear);
+                true
+            }
+            BTN_RIGHT => {
+                let geometry = window.geometry();
+                let grab = ResizeSurfaceGrab::start(
+                    start_data,
+                    window,
+                    ResizeEdge::BOTTOM_RIGHT,
+                    smithay::utils::Rectangle::new(window_location, geometry.size),
+                );
+                self.seat
+                    .get_pointer()
+                    .unwrap()
+                    .set_grab(self, grab, serial, Focus::Clear);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn clear_focus(&mut self, serial: Serial) {
+        for window in self.space.elements() {
+            let Some(toplevel) = window.toplevel() else {
+                continue;
+            };
+            toplevel.with_pending_state(|state| {
+                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+                state.states.unset(xdg_toplevel::State::Activated);
+            });
+            toplevel.send_pending_configure();
+        }
+
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .set_focus(self, Option::<WlSurface>::None, serial);
+        self.request_redraw();
+    }
+
+    /// Feed a key event to the focused client, intercepting our shortcuts.
+    fn keyboard_key_to_action(
+        &mut self,
+        keycode: Keycode,
+        state: KeyState,
+        time: u32,
+    ) -> Option<KeyAction> {
+        let serial = SERIAL_COUNTER.next_serial();
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let mut suppressed: Vec<Keysym> = std::mem::take(&mut self.suppressed_keys);
+
+        let action = keyboard.input(
+            self,
+            keycode,
+            state,
+            serial,
+            time,
+            |_, modifiers, handle| {
+                let keysym = handle.modified_sym();
+                match state {
+                    KeyState::Pressed => match keybindings::action_for(*modifiers, keysym) {
+                        Some(action) => {
+                            suppressed.push(keysym);
+                            FilterResult::Intercept(action)
+                        }
+                        None => FilterResult::Forward,
+                    },
+                    KeyState::Released => {
+                        if suppressed.contains(&keysym) {
+                            suppressed.retain(|key| *key != keysym);
+                            FilterResult::Intercept(KeyAction::None)
+                        } else {
+                            FilterResult::Forward
+                        }
+                    }
+                }
+            },
+        );
+
+        self.suppressed_keys = suppressed;
+        action
+    }
+
+    fn handle_key_action(&mut self, action: KeyAction) {
+        match action {
+            KeyAction::None => {}
+            KeyAction::CloseWindow => {
+                if let Some(window) = self.focused_window() {
+                    if let Some(toplevel) = window.toplevel() {
+                        toplevel.send_close();
+                    }
+                }
+            }
+            KeyAction::Quit => self.loop_signal.stop(),
+        }
+    }
+}

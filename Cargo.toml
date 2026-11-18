@@ -1,0 +1,25 @@
+[package]
+name = "mriya-wm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Mriya WM - a stacking Wayland window manager"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+bitflags = "2"
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "desktop",
+    "wayland_frontend",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Debug builds stay fast enough to run a compositor.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
