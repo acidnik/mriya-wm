@@ -99,8 +99,9 @@ binds {
 }
 
 // Per-window rules, evaluated whenever a window's app-id or title changes; the
-// last matching rule wins. Useful for applications that insist on drawing their
-// own client-side decorations.
+// last matching rule wins. Decorations are normally detected automatically (a
+// client that draws its own sets an inset window geometry), so rules here are an
+// escape hatch for exceptions:
 window-rule {
     match app-id=r#"^org\.gnome\."#
     decorations "client-side"

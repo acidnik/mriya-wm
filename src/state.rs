@@ -301,13 +301,17 @@ impl Mriya {
     /// Drop cached frame textures of every window, so they are rebuilt with the
     /// current theme and title.
     fn invalidate_frames(&mut self) {
-        for window in self.space.elements() {
-            if let Some(cache) = window
-                .user_data()
-                .get::<std::cell::RefCell<Option<crate::decor::frame::CachedFrame>>>()
-            {
-                *cache.borrow_mut() = None;
-            }
+        for window in self.space.elements().cloned().collect::<Vec<_>>() {
+            self.invalidate_window_frame(&window);
+        }
+    }
+
+    fn invalidate_window_frame(&self, window: &Window) {
+        if let Some(cache) = window
+            .user_data()
+            .get::<std::cell::RefCell<Option<crate::decor::frame::CachedFrame>>>()
+        {
+            *cache.borrow_mut() = None;
         }
     }
 
@@ -321,25 +325,64 @@ impl Mriya {
         }
     }
 
-    /// Re-evaluate `window-rule`s for a window whose title or app-id changed.
-    pub fn apply_window_rules(&mut self, window: &Window) {
-        let Some(mode) = self.rule_decoration_mode(window) else {
-            return;
-        };
-        let current = decor::state(window).mode;
-        if current == mode {
-            return;
-        }
+    /// Recompute the decoration mode of a window: a rule may force it, the
+    /// client may have asked, or it may bring its own decorations.
+    pub fn update_decoration_mode(&mut self, window: &Window) {
+        let detected = decor::detects_client_decorations(window);
 
-        decor::state_mut(window).mode = mode;
-        // Tell the client as well, if it speaks xdg-decoration.
+        let changed = {
+            let mut state = decor::state_mut(window);
+            let mut changed = false;
+            if state.client_decorations != detected {
+                state.client_decorations = detected;
+                changed = true;
+            }
+            changed |= state.refresh_mode();
+            changed
+        };
+
+        if changed {
+            tracing::debug!(
+                app_id = %decor::state(window).app_id,
+                mode = ?decor::state(window).mode,
+                "decoration mode decided"
+            );
+            // Frame textures depend on the mode.
+            self.invalidate_window_frame(window);
+            self.request_redraw();
+        }
+    }
+
+    /// Tell the client the effective mode, after a rule or a detection change.
+    pub fn sync_decoration_mode(&mut self, window: &Window) {
+        let mode = decor::state(window).mode;
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|state| {
                 state.decoration_mode = Some(mode);
             });
             toplevel.send_pending_configure();
         }
+        self.invalidate_window_frame(window);
         self.request_redraw();
+    }
+
+    /// Re-evaluate `window-rule`s for a window whose title or app-id changed.
+    pub fn apply_window_rules(&mut self, window: &Window) {
+        let rule_mode = self.rule_decoration_mode(window);
+        let before = decor::state(window).mode;
+
+        {
+            let mut state = decor::state_mut(window);
+            if state.rule_mode == rule_mode {
+                return;
+            }
+            state.rule_mode = rule_mode;
+            state.refresh_mode();
+        }
+
+        if decor::state(window).mode != before {
+            self.sync_decoration_mode(window);
+        }
     }
 
     /// Window that hosts the given toplevel surface.

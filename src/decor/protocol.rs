@@ -15,20 +15,19 @@ use crate::{config::DecorationPolicy, decor, state::Mriya};
 
 impl XdgDecorationHandler for Mriya {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        self.apply_decoration_mode(&toplevel, Mode::ServerSide);
+        // The client speaks the protocol but has no preference yet: propose
+        // server-side, which is what Mriya does by default.
+        self.set_requested_decoration(&toplevel, None, Mode::ServerSide);
     }
 
     fn request_mode(&mut self, toplevel: ToplevelSurface, mode: Mode) {
-        // A window rule is authoritative over the client's preference.
-        let effective = self
-            .window_for_toplevel(&toplevel)
-            .and_then(|window| self.rule_decoration_mode(&window))
-            .unwrap_or(mode);
-        self.apply_decoration_mode(&toplevel, effective);
+        let fallback = mode;
+        self.set_requested_decoration(&toplevel, Some(mode), fallback);
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
-        self.apply_decoration_mode(&toplevel, Mode::ServerSide);
+        // "No preference": fall back to detection.
+        self.set_requested_decoration(&toplevel, None, Mode::ServerSide);
     }
 }
 
@@ -54,16 +53,31 @@ impl Mriya {
             })
     }
 
-    /// Tell the client which decoration mode applies and record it for drawing.
-    pub fn apply_decoration_mode(&mut self, toplevel: &ToplevelSurface, mode: Mode) {
-        toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(mode);
-        });
-        toplevel.send_pending_configure();
+    /// Record the client's decoration preference and tell it the effective mode.
+    fn set_requested_decoration(
+        &mut self,
+        toplevel: &ToplevelSurface,
+        requested: Option<Mode>,
+        propose: Mode,
+    ) {
+        let Some(window) = self.window_for_toplevel(toplevel) else {
+            // The window is not mapped yet: just advertise a mode, the effective
+            // one is computed once the window exists.
+            toplevel.with_pending_state(|state| {
+                state.decoration_mode = Some(propose);
+            });
+            toplevel.send_pending_configure();
+            return;
+        };
 
-        if let Some(window) = self.window_for_toplevel(toplevel) {
-            decor::state_mut(&window).mode = mode;
+        let changed = {
+            let mut state = decor::state_mut(&window);
+            state.requested_mode = requested;
+            state.refresh_mode()
+        };
+
+        if changed {
+            self.sync_decoration_mode(&window);
         }
-        self.request_redraw();
     }
 }

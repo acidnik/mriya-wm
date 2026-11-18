@@ -36,7 +36,7 @@ impl CompositorHandler for Mriya {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            if let Some(window) = self
+            let window = self
                 .space
                 .elements()
                 .find(|window| {
@@ -45,9 +45,12 @@ impl CompositorHandler for Mriya {
                         .map(|toplevel| toplevel.wl_surface() == &root)
                         .unwrap_or(false)
                 })
-                .cloned()
-            {
+                .cloned();
+            if let Some(window) = window {
                 window.on_commit();
+                // The client's window geometry is what tells whether it draws
+                // its own decorations, and it is only known after a commit.
+                self.update_decoration_mode(&window);
             }
         }
 

@@ -192,7 +192,14 @@ pub fn button_state(state: &FrameState, button: FrameButton) -> &'static str {
 /// Per-window decoration state, stored in the window's user data.
 #[derive(Debug, Clone)]
 pub struct FrameState {
+    /// Effective mode, the one used for drawing.
     pub mode: Mode,
+    /// Mode the client asked for through `xdg-decoration`, if it speaks it.
+    pub requested_mode: Option<Mode>,
+    /// Mode forced by a `window-rule`, if any.
+    pub rule_mode: Option<Mode>,
+    /// The client draws its own decorations; detected from its window geometry.
+    pub client_decorations: bool,
     pub active: bool,
     pub maximized: bool,
     pub fullscreen: bool,
@@ -207,9 +214,12 @@ pub struct FrameState {
 impl Default for FrameState {
     fn default() -> Self {
         Self {
-            // Mriya decorates by default; a client that explicitly asks for
-            // client-side decorations keeps them.
+            // Mriya decorates by default; clients that bring their own
+            // decorations (detected on commit) or ask for them keep them.
             mode: Mode::ServerSide,
+            requested_mode: None,
+            rule_mode: None,
+            client_decorations: false,
             active: false,
             maximized: false,
             fullscreen: false,
@@ -226,6 +236,46 @@ impl FrameState {
     pub fn decorated(&self) -> bool {
         self.mode == Mode::ServerSide && !self.fullscreen
     }
+
+    /// Recompute the effective mode from the rule, the protocol request and what
+    /// the client actually draws. Returns whether it changed.
+    ///
+    /// Precedence: an explicit `window-rule`, then what the client told us over
+    /// `xdg-decoration`, then automatic detection.
+    pub fn refresh_mode(&mut self) -> bool {
+        let effective =
+            self.rule_mode
+                .or(self.requested_mode)
+                .unwrap_or(if self.client_decorations {
+                    Mode::ClientSide
+                } else {
+                    Mode::ServerSide
+                });
+
+        let changed = self.mode != effective;
+        self.mode = effective;
+        changed
+    }
+}
+
+/// Does the client draw its own decorations?
+///
+/// Such a client has to report a window geometry that excludes them
+/// (`xdg_toplevel.set_window_geometry`): either offset from the surface origin
+/// (titlebar, shadow above/left) or smaller than the surface (borders, shadow
+/// below/right). Server-decorated clients report the whole surface, so geometry
+/// and the surface tree match. Measured on this system: foot/kitty report the
+/// full surface, ghostty/thunar/appfinder report an inset one.
+pub fn detects_client_decorations(window: &Window) -> bool {
+    geometry_looks_inset(window.geometry(), window.bbox())
+}
+
+/// The comparison behind [`detects_client_decorations`], split out for tests.
+fn geometry_looks_inset(
+    geometry: Rectangle<i32, Logical>,
+    surface: Rectangle<i32, Logical>,
+) -> bool {
+    geometry.loc != Point::from((0, 0)) || geometry.size != surface.size
 }
 
 /// Border widths around the client content.
@@ -535,6 +585,28 @@ mod tests {
         let geometry = FrameGeometry::of(None, &state);
         assert_eq!(geometry.top, TITLEBAR_HEIGHT);
         assert_eq!((geometry.left, geometry.right, geometry.bottom), (0, 0, 0));
+    }
+
+    #[test]
+    fn full_surface_geometry_means_no_client_decorations() {
+        let surface = Rectangle::new(Point::from((0, 0)), Size::from((696, 496)));
+        assert!(!geometry_looks_inset(surface, surface));
+    }
+
+    #[test]
+    fn inset_geometry_means_client_decorations() {
+        // ghostty on this system: a 12/14 px shadow around the content.
+        let surface = Rectangle::new(Point::from((0, 0)), Size::from((828, 629)));
+        let geometry = Rectangle::new(Point::from((14, 12)), Size::from((800, 600)));
+        assert!(geometry_looks_inset(geometry, surface));
+
+        // Offset only (a titlebar without side borders).
+        let geometry = Rectangle::new(Point::from((0, 26)), Size::from((828, 603)));
+        assert!(geometry_looks_inset(geometry, surface));
+
+        // Smaller only (borders without an offset).
+        let geometry = Rectangle::new(Point::from((0, 0)), Size::from((820, 621)));
+        assert!(geometry_looks_inset(geometry, surface));
     }
 
     #[test]
