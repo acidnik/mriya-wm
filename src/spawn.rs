@@ -141,7 +141,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("kitty"), b"#!/bin/sh\n").unwrap();
 
-        assert_eq!(find_terminal(&[dir.clone()]), Some("kitty".to_string()));
+        assert_eq!(
+            find_terminal(std::slice::from_ref(&dir)),
+            Some("kitty".to_string())
+        );
         assert_eq!(find_terminal(&[]), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
