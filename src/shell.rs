@@ -12,7 +12,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Size},
 };
 
-use crate::decor::{self, FrameGeometry};
+use crate::decor::{self, theme::Theme, FrameGeometry};
 
 /// Offset of each subsequent window in the cascade, in logical pixels.
 const CASCADE_STEP: i32 = 32;
@@ -45,19 +45,19 @@ pub fn location_for_new_window(space: &Space<Window>) -> Point<i32, Logical> {
 }
 
 /// Toggle fullscreen for `window`.
-pub fn toggle_fullscreen(space: &mut Space<Window>, window: &Window) {
+pub fn toggle_fullscreen(theme: Option<&Theme>, space: &mut Space<Window>, window: &Window) {
     let fullscreen = decor::state(window).fullscreen;
-    set_fullscreen(space, window, !fullscreen);
+    set_fullscreen(theme, space, window, !fullscreen);
 }
 
 /// Toggle maximization for `window`.
-pub fn toggle_maximized(space: &mut Space<Window>, window: &Window) {
+pub fn toggle_maximized(theme: Option<&Theme>, space: &mut Space<Window>, window: &Window) {
     let maximized = decor::state(window).maximized;
-    set_maximized(space, window, !maximized);
+    set_maximized(theme, space, window, !maximized);
 }
 
 /// Fullscreen / unfullscreen a window (client request or key binding).
-pub fn set_fullscreen(space: &mut Space<Window>, window: &Window, on: bool) {
+pub fn set_fullscreen(theme: Option<&Theme>, space: &mut Space<Window>, window: &Window, on: bool) {
     let Some(toplevel) = window.toplevel() else {
         return;
     };
@@ -66,7 +66,7 @@ pub fn set_fullscreen(space: &mut Space<Window>, window: &Window, on: bool) {
         let mut frame = decor::state_mut(window);
         frame.fullscreen = on;
     }
-    let geometry = FrameGeometry::of(&decor::state(window));
+    let geometry = FrameGeometry::of(theme, &decor::state(window));
 
     if !on {
         restore_geometry(space, window);
@@ -98,7 +98,7 @@ pub fn set_fullscreen(space: &mut Space<Window>, window: &Window, on: bool) {
 }
 
 /// Maximize / unmaximize a window (client request or key binding).
-pub fn set_maximized(space: &mut Space<Window>, window: &Window, on: bool) {
+pub fn set_maximized(theme: Option<&Theme>, space: &mut Space<Window>, window: &Window, on: bool) {
     let Some(toplevel) = window.toplevel() else {
         return;
     };
@@ -107,7 +107,7 @@ pub fn set_maximized(space: &mut Space<Window>, window: &Window, on: bool) {
         let mut frame = decor::state_mut(window);
         frame.maximized = on;
     }
-    let geometry = FrameGeometry::of(&decor::state(window));
+    let geometry = FrameGeometry::of(theme, &decor::state(window));
 
     if !on {
         restore_geometry(space, window);

@@ -28,6 +28,17 @@ fn main() -> Result<()> {
     init_tracing();
 
     let args = parse_args()?;
+    if args.list_themes {
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        for name in decor::theme::available_themes() {
+            // Ignore a closed pipe, `--list-themes | head` is a normal thing to do.
+            if writeln!(stdout, "{name}").is_err() {
+                break;
+            }
+        }
+        return Ok(());
+    }
     let config = load_config(&args);
 
     // niri-compatible: `environment { ... }` is exported to the session and to
@@ -80,11 +91,13 @@ fn load_config(args: &Args) -> Config {
 struct Args {
     command: Vec<String>,
     config: Option<PathBuf>,
+    list_themes: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut command = Vec::new();
     let mut config = None;
+    let mut list_themes = false;
     let mut args = env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -94,6 +107,7 @@ fn parse_args() -> Result<Args> {
                 Some(path) => config = Some(PathBuf::from(path)),
                 None => bail!("--config requires a path"),
             },
+            "--list-themes" => list_themes = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -102,7 +116,11 @@ fn parse_args() -> Result<Args> {
         }
     }
 
-    Ok(Args { command, config })
+    Ok(Args {
+        command,
+        config,
+        list_themes,
+    })
 }
 
 fn print_help() {
@@ -116,6 +134,7 @@ USAGE:
 
 OPTIONS:
     --config <PATH>                     Config file (default: $XDG_CONFIG_HOME/mriya/config.kdl)
+    --list-themes                       Print the xfwm4 themes found and exit
     -c, --command <PROGRAM> [ARGS...]   Start a client after the compositor is up
     -h, --help                          Print this help
 

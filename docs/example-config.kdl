@@ -19,6 +19,26 @@ cursor {
     // hide-when-typing
 }
 
+// Server-side window decorations (xfwm4 themes).
+decorations {
+    // Any theme name from `mriya-wm --list-themes`; images come from
+    // ~/.themes, ~/.local/share/themes and $XDG_DATA_DIRS/themes.
+    theme "Default"
+
+    // The title font is an xfwm4 setting, not a part of the theme.
+    title-font "Sans Bold 9"
+
+    // Overrides the theme's `button_layout`, e.g. "O|SHMC".
+    // button-layout "O|SHMC"
+
+    // Palette of the 24 symbols xfwm4 themes refer to instead of literal
+    // colours. Only the ones a theme uses need to be set.
+    palette {
+        // active_color_2 "#336699"
+        // active_text_color "#ffffff"
+    }
+}
+
 input {
     keyboard {
         xkb {

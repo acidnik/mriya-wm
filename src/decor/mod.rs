@@ -11,6 +11,7 @@
 
 pub mod protocol;
 pub mod render;
+pub mod theme;
 
 use std::cell::{Ref, RefCell, RefMut};
 
@@ -20,7 +21,7 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Size},
 };
 
-use crate::grabs::ResizeEdge;
+use crate::{decor::theme::Theme, grabs::ResizeEdge};
 
 /// Height of the titlebar, border widths are symmetric for now.
 pub const TITLEBAR_HEIGHT: i32 = 28;
@@ -90,17 +91,34 @@ pub struct FrameGeometry {
 }
 
 impl FrameGeometry {
-    pub fn of(state: &FrameState) -> Self {
+    /// Frame around a window, using the theme's sizes when one is loaded.
+    pub fn of(theme: Option<&Theme>, state: &FrameState) -> Self {
         if !state.decorated() {
             return Self::default();
         }
 
-        let mut geometry = Self {
-            left: BORDER_WIDTH,
-            top: TITLEBAR_HEIGHT,
-            right: BORDER_WIDTH,
-            bottom: BORDER_WIDTH,
+        // Geometry follows the active images, like `frameDecoration*` in xfwm4,
+        // so the frame does not change size when focus moves.
+        let mut geometry = match theme {
+            Some(theme) => Self {
+                left: theme.border_left(true),
+                top: theme.title_height(true),
+                right: theme.border_right(true),
+                bottom: theme.border_bottom(true),
+            },
+            None => Self {
+                left: BORDER_WIDTH,
+                top: TITLEBAR_HEIGHT,
+                right: BORDER_WIDTH,
+                bottom: BORDER_WIDTH,
+            },
         };
+
+        // A theme that provides nothing usable still needs a titlebar to grab.
+        if geometry.top <= 0 {
+            geometry.top = TITLEBAR_HEIGHT;
+        }
+
         if state.maximized {
             // Like xfwm4's `borderless_maximize`: no side borders, the titlebar
             // stays on top of the screen.
@@ -184,7 +202,10 @@ pub struct FrameHit {
 }
 
 /// Rectangle of every titlebar button for a frame with the given outer rect.
-pub fn button_rects(outer: Rectangle<i32, Logical>) -> [(FrameButton, Rectangle<i32, Logical>); 2] {
+pub fn button_rects(
+    outer: Rectangle<i32, Logical>,
+    title_height: i32,
+) -> [(FrameButton, Rectangle<i32, Logical>); 2] {
     let y = outer.loc.y;
     let right = outer.loc.x + outer.size.w - BUTTON_OFFSET;
     let mut rects = [(FrameButton::Maximize, Rectangle::default()); 2];
@@ -195,7 +216,7 @@ pub fn button_rects(outer: Rectangle<i32, Logical>) -> [(FrameButton, Rectangle<
             button,
             Rectangle::new(
                 Point::from((x, y)),
-                Size::from((BUTTON_WIDTH, TITLEBAR_HEIGHT)),
+                Size::from((BUTTON_WIDTH, title_height)),
             ),
         );
     }
@@ -203,7 +224,11 @@ pub fn button_rects(outer: Rectangle<i32, Logical>) -> [(FrameButton, Rectangle<
 }
 
 /// Topmost window frame under `position`, in space coordinates.
-pub fn hit_test(space: &Space<Window>, position: Point<f64, Logical>) -> Option<FrameHit> {
+pub fn hit_test(
+    theme: Option<&Theme>,
+    space: &Space<Window>,
+    position: Point<f64, Logical>,
+) -> Option<FrameHit> {
     for window in space.elements().rev() {
         let Some(content) = space.element_geometry(window) else {
             continue;
@@ -223,7 +248,7 @@ pub fn hit_test(space: &Space<Window>, position: Point<f64, Logical>) -> Option<
             continue;
         }
 
-        let geometry = FrameGeometry::of(&frame);
+        let geometry = FrameGeometry::of(theme, &frame);
         let outer = geometry.outer_rect(content);
         if !outer.to_f64().contains(position) {
             continue;
@@ -233,7 +258,7 @@ pub fn hit_test(space: &Space<Window>, position: Point<f64, Logical>) -> Option<
             FramePart::Content
         } else if position.y < content.loc.y as f64 {
             // Titlebar band, corners included.
-            button_rects(outer)
+            button_rects(outer, geometry.top)
                 .into_iter()
                 .find(|(_, rect)| rect.to_f64().contains(position))
                 .map(|(button, _)| FramePart::Button(button))
@@ -284,7 +309,7 @@ mod tests {
 
     #[test]
     fn content_offset_matches_border_widths() {
-        let geometry = FrameGeometry::of(&server_side());
+        let geometry = FrameGeometry::of(None, &server_side());
         assert_eq!(geometry.top, TITLEBAR_HEIGHT);
         assert_eq!(geometry.left, BORDER_WIDTH);
         assert_eq!(
@@ -295,7 +320,7 @@ mod tests {
 
     #[test]
     fn outer_size_includes_the_frame() {
-        let geometry = FrameGeometry::of(&server_side());
+        let geometry = FrameGeometry::of(None, &server_side());
         assert_eq!(
             geometry.outer_size(Size::from((100, 50))),
             Size::from((100 + 2 * BORDER_WIDTH, 50 + TITLEBAR_HEIGHT + BORDER_WIDTH))
@@ -304,7 +329,7 @@ mod tests {
 
     #[test]
     fn outer_rect_is_anchored_around_the_content() {
-        let geometry = FrameGeometry::of(&server_side());
+        let geometry = FrameGeometry::of(None, &server_side());
         let content = Rectangle::new(Point::from((100, 100)), Size::from((200, 100)));
         let outer = geometry.outer_rect(content);
         assert_eq!(
@@ -318,18 +343,18 @@ mod tests {
     fn fullscreen_and_client_side_have_no_frame() {
         let mut ml = server_side();
         ml.fullscreen = true;
-        assert!(FrameGeometry::of(&ml).is_empty());
+        assert!(FrameGeometry::of(None, &ml).is_empty());
 
         let mut csd = server_side();
         csd.mode = Mode::ClientSide;
-        assert!(FrameGeometry::of(&csd).is_empty());
+        assert!(FrameGeometry::of(None, &csd).is_empty());
     }
 
     #[test]
     fn maximized_keeps_only_the_titlebar() {
         let mut state = server_side();
         state.maximized = true;
-        let geometry = FrameGeometry::of(&state);
+        let geometry = FrameGeometry::of(None, &state);
         assert_eq!(geometry.top, TITLEBAR_HEIGHT);
         assert_eq!((geometry.left, geometry.right, geometry.bottom), (0, 0, 0));
     }
@@ -337,7 +362,7 @@ mod tests {
     #[test]
     fn buttons_are_laid_out_from_the_right_edge() {
         let outer = Rectangle::new(Point::from((0, 0)), Size::from((400, 200)));
-        let rects = button_rects(outer);
+        let rects = button_rects(outer, TITLEBAR_HEIGHT);
 
         // Close is the rightmost button, maximize sits to its left.
         let (close_button, close) = rects[0];

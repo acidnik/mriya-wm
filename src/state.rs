@@ -32,7 +32,11 @@ use tracing::debug;
 
 use crate::{
     config::Config,
-    decor::{self, FrameButton},
+    decor::{
+        self,
+        theme::{self, Theme},
+        FrameButton,
+    },
     keybindings::{Action, Keybindings},
     shell,
     spawn::Spawner,
@@ -65,6 +69,8 @@ pub struct Mriya {
     /// Last titlebar click, for double click to maximize.
     pub last_titlebar_click: Option<(Instant, Point<f64, Logical>)>,
 
+    /// Loaded xfwm4 theme, if one was found.
+    pub theme: Option<Theme>,
     /// Everything read from `config.kdl`.
     pub config: Config,
     /// Lookup table built from `config.binds`.
@@ -113,6 +119,7 @@ impl Mriya {
 
         let socket_name = Self::init_wayland_listener(display, event_loop);
         let loop_signal = event_loop.get_signal();
+        let theme = Self::load_theme(&config);
         let spawner = Spawner::new(socket_name.to_string_lossy().into_owned());
         let keybindings = Keybindings::new(config.binds.clone());
         let binding_keymap = {
@@ -143,6 +150,7 @@ impl Mriya {
             renderer: None,
             frame_press: None,
             last_titlebar_click: None,
+            theme,
             config,
             keybindings,
             spawner,
@@ -155,6 +163,33 @@ impl Mriya {
             seat_state,
             data_device_state,
             seat,
+        }
+    }
+
+    /// Load the configured xfwm4 theme; without one the flat frame stays.
+    fn load_theme(config: &Config) -> Option<Theme> {
+        let mut params = theme::ThemeParams::default();
+        for (symbol, value) in &config.decorations.palette {
+            if !params.palette.set(symbol, value) {
+                tracing::warn!(symbol, value, "unknown or unparsable palette override");
+            }
+        }
+        if let Some(layout) = &config.decorations.button_layout {
+            params.button_layout = layout.clone();
+        }
+
+        let name = config
+            .decorations
+            .theme
+            .clone()
+            .unwrap_or_else(|| "Default".to_string());
+
+        match Theme::load(&name, params) {
+            Ok(loaded) => Some(loaded),
+            Err(_) => {
+                theme::warn_missing_theme(&name);
+                None
+            }
         }
     }
 
@@ -247,13 +282,13 @@ impl Mriya {
             Action::Quit => self.loop_signal.stop(),
             Action::FullscreenWindow => {
                 if let Some(window) = self.active_window() {
-                    shell::toggle_fullscreen(&mut self.space, &window);
+                    shell::toggle_fullscreen(self.theme.as_ref(), &mut self.space, &window);
                     self.request_redraw();
                 }
             }
             Action::MaximizeWindow => {
                 if let Some(window) = self.active_window() {
-                    shell::toggle_maximized(&mut self.space, &window);
+                    shell::toggle_maximized(self.theme.as_ref(), &mut self.space, &window);
                     self.request_redraw();
                 }
             }

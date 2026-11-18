@@ -18,6 +18,7 @@ use crate::keybindings::{self, Binding, ModAlias};
 #[derive(Debug, Clone)]
 pub struct Config {
     pub cursor: CursorConfig,
+    pub decorations: DecorationsConfig,
     pub keyboard: KeyboardConfig,
     /// Bindings in the order they were written; the first match wins.
     pub binds: Vec<Binding>,
@@ -25,6 +26,20 @@ pub struct Config {
     pub spawn_at_startup: Vec<Vec<String>>,
     /// Environment variables exported to the session and to spawned clients.
     pub environment: Vec<(String, String)>,
+}
+
+/// Server-side decoration settings (`decorations { ... }`).
+#[derive(Debug, Clone, Default)]
+pub struct DecorationsConfig {
+    /// Theme name; `None` means the built-in `Default` theme.
+    pub theme: Option<String>,
+    /// Font for window titles, e.g. `Sans Bold 9` (xfwm4 takes it from its own
+    /// settings, not from the theme).
+    pub title_font: Option<String>,
+    /// Overrides the theme's `button_layout`.
+    pub button_layout: Option<String>,
+    /// Palette overrides for the 24 xfwm4 colour symbols.
+    pub palette: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -68,6 +83,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             cursor: CursorConfig::default(),
+            decorations: DecorationsConfig::default(),
             keyboard: KeyboardConfig::default(),
             binds: keybindings::default_binds(),
             spawn_at_startup: Vec::new(),
@@ -132,6 +148,7 @@ fn from_document(document: &KdlDocument, mod_alias: ModAlias) -> Config {
     for node in document.nodes() {
         match node.name().value() {
             "cursor" => parse_cursor(node, &mut config.cursor),
+            "decorations" => parse_decorations(node, &mut config.decorations),
             "input" => parse_input(node, &mut config.keyboard),
             "binds" => parse_binds(node, &mut config.binds, mod_alias),
             "spawn-at-startup" => {
@@ -172,6 +189,39 @@ fn parse_cursor(node: &KdlNode, cursor: &mut CursorConfig) {
                 cursor.xcursor_size = first_integer(child).and_then(|size| u32::try_from(size).ok())
             }
             other => debug!(node = other, "cursor option is not supported yet, ignoring"),
+        }
+    }
+}
+
+fn parse_decorations(node: &KdlNode, decorations: &mut DecorationsConfig) {
+    let Some(children) = node.children() else {
+        return;
+    };
+    for child in children.nodes() {
+        match child.name().value() {
+            "theme" => decorations.theme = first_string(child),
+            "title-font" => decorations.title_font = first_string(child),
+            "button-layout" => decorations.button_layout = first_string(child),
+            "palette" => {
+                let Some(palette_children) = child.children() else {
+                    continue;
+                };
+                for symbol in palette_children.nodes() {
+                    match first_string(symbol) {
+                        Some(value) => decorations
+                            .palette
+                            .push((symbol.name().value().to_string(), value)),
+                        None => warn!(
+                            symbol = symbol.name().value(),
+                            "palette symbol without a value, ignoring"
+                        ),
+                    }
+                }
+            }
+            other => debug!(
+                option = other,
+                "decoration option is not supported yet, ignoring"
+            ),
         }
     }
 }
@@ -322,7 +372,7 @@ mod tests {
 
     #[test]
     fn parses_niri_style_config() {
-        let text = r#"
+        let text = r##"
 cursor {
     xcursor-theme "Horse-Red"
     xcursor-size 38
@@ -348,6 +398,15 @@ layout {
     gaps 4
 }
 
+decorations {
+    theme "Default"
+    title-font "Sans Bold 9"
+    palette {
+        active_color_2 "#336699"
+        active_text_color "#ffffff"
+    }
+}
+
 environment {
     XDG_MENU_PREFIX "arch-"
 }
@@ -363,7 +422,7 @@ binds {
     Mod+F { fullscreen-window; }
     XF86AudioPlay { spawn "playerctl" "play-pause"; }
 }
-"#;
+"##;
         let config = parse(text, ModAlias::Alt).expect("config parses");
 
         assert_eq!(config.cursor.xcursor_theme.as_deref(), Some("Horse-Red"));
@@ -387,11 +446,23 @@ binds {
             ]
         );
         assert_eq!(config.binds.len(), 6);
+        assert_eq!(config.decorations.theme.as_deref(), Some("Default"));
+        assert_eq!(
+            config.decorations.title_font.as_deref(),
+            Some("Sans Bold 9")
+        );
+        assert_eq!(
+            config.decorations.palette,
+            vec![
+                ("active_color_2".to_string(), "#336699".to_string()),
+                ("active_text_color".to_string(), "#ffffff".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn unknown_sections_do_not_break_the_parse() {
-        let text = r#"
+        let text = r##"
 overview {
     zoom 0.5
 }
@@ -402,7 +473,7 @@ window-rule {
 binds {
     Mod+q { close-window; }
 }
-"#;
+"##;
         let config = parse(text, ModAlias::Alt).expect("unknown sections are ignored");
         assert_eq!(config.binds.len(), 1);
     }

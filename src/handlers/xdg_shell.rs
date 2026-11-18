@@ -42,7 +42,8 @@ impl XdgShellHandler for Mriya {
         let window = Window::new_wayland_window(surface);
         // The frame is drawn around the content area, so the cascade position
         // applies to the frame and the content moves inside it.
-        let content_offset = FrameGeometry::of(&decor::state(&window)).content_offset();
+        let content_offset =
+            FrameGeometry::of(self.theme.as_ref(), &decor::state(&window)).content_offset();
         let location = shell::location_for_new_window(&self.space) + content_offset;
         self.space.map_element(window.clone(), location, false);
         self.focus_window(&window);
@@ -149,7 +150,9 @@ impl XdgShellHandler for Mriya {
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         match self.window_for_toplevel(&surface) {
-            Some(window) => shell::set_maximized(&mut self.space, &window, true),
+            Some(window) => {
+                shell::set_maximized(self.theme.as_ref(), &mut self.space, &window, true)
+            }
             None => {
                 surface.send_configure();
             }
@@ -159,7 +162,9 @@ impl XdgShellHandler for Mriya {
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         match self.window_for_toplevel(&surface) {
-            Some(window) => shell::set_maximized(&mut self.space, &window, false),
+            Some(window) => {
+                shell::set_maximized(self.theme.as_ref(), &mut self.space, &window, false)
+            }
             None => {
                 surface.send_configure();
             }
@@ -173,7 +178,9 @@ impl XdgShellHandler for Mriya {
         _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
     ) {
         match self.window_for_toplevel(&surface) {
-            Some(window) => shell::set_fullscreen(&mut self.space, &window, true),
+            Some(window) => {
+                shell::set_fullscreen(self.theme.as_ref(), &mut self.space, &window, true)
+            }
             None => {
                 surface.send_configure();
             }
@@ -183,7 +190,9 @@ impl XdgShellHandler for Mriya {
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
         match self.window_for_toplevel(&surface) {
-            Some(window) => shell::set_fullscreen(&mut self.space, &window, false),
+            Some(window) => {
+                shell::set_fullscreen(self.theme.as_ref(), &mut self.space, &window, false)
+            }
             None => {
                 surface.send_configure();
             }

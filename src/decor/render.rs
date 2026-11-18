@@ -19,9 +19,12 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Scale, Size},
 };
 
-use crate::{backend::element::NestedRenderElement, decor::FrameGeometry};
+use crate::{
+    backend::element::NestedRenderElement,
+    decor::{theme::Theme, FrameGeometry},
+};
 
-use super::{button_rects, state, state_mut, FrameState, TITLEBAR_HEIGHT};
+use super::{button_rects, state, state_mut, FrameState};
 
 /// Colours of the flat frame, per state.
 const BORDER_COLOR: [f32; 4] = [0.13, 0.13, 0.15, 1.0];
@@ -48,11 +51,12 @@ struct FrameBuffers {
 impl FrameBuffers {
     fn update(
         &mut self,
+        geometry: FrameGeometry,
         outer: Rectangle<i32, Logical>,
         buttons: [(super::FrameButton, Rectangle<i32, Logical>); 2],
         state: &FrameState,
     ) {
-        let titlebar = Rectangle::new(outer.loc, Size::from((outer.size.w, TITLEBAR_HEIGHT)));
+        let titlebar = Rectangle::new(outer.loc, Size::from((outer.size.w, geometry.top)));
         let titlebar_color = if state.active {
             TITLEBAR_ACTIVE
         } else {
@@ -95,7 +99,7 @@ impl FrameBuffers {
                 super::FrameButton::Close => &mut self.close,
             };
             // Leave a small gap so the buttons do not touch the frame edge.
-            let size = Size::from((rect.size.w, rect.size.h - 2 * super::BUTTON_OFFSET));
+            let size = Size::from((rect.size.w, (rect.size.h - 2 * super::BUTTON_OFFSET).max(1)));
             buffer.update(size, color);
         }
     }
@@ -141,6 +145,7 @@ impl FrameBuffers {
 /// The elements are emitted before the client's own elements, so the frame is
 /// drawn below its client surface but above windows further down the stack.
 pub fn elements(
+    theme: Option<&Theme>,
     window: &Window,
     content_location: Point<i32, Logical>,
     content_size: Size<i32, Logical>,
@@ -156,7 +161,7 @@ pub fn elements(
         return Vec::new();
     }
 
-    let geometry: FrameGeometry = FrameGeometry::of(&frame);
+    let geometry: FrameGeometry = FrameGeometry::of(theme, &frame);
     if geometry.is_empty() {
         return Vec::new();
     }
@@ -170,7 +175,7 @@ pub fn elements(
         ?outer,
         "frame geometry"
     );
-    let buttons = button_rects(outer);
+    let buttons = button_rects(outer, geometry.top);
 
     window
         .user_data()
@@ -180,7 +185,7 @@ pub fn elements(
         .get::<RefCell<FrameBuffers>>()
         .expect("frame buffers were just inserted")
         .borrow_mut();
-    buffers.update(outer, buttons, &frame);
+    buffers.update(geometry, outer, buttons, &frame);
 
     buffers.elements(outer, buttons, scale)
 }
