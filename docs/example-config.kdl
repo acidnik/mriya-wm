@@ -31,6 +31,11 @@ decorations {
     // Overrides the theme's `button_layout`, e.g. "O|SHMC".
     // button-layout "O|SHMC"
 
+    // Drop shadows: `false` turns them off completely, `shadow-opacity`
+    // overrides the theme's `shadow_opacity` (0..100).
+    shadows true
+    // shadow-opacity 30
+
     // Palette of the 24 symbols xfwm4 themes refer to instead of literal
     // colours. Only the ones a theme uses need to be set.
     palette {

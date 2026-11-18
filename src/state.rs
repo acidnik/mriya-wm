@@ -181,19 +181,13 @@ impl Mriya {
     }
 
     /// Load the configured xfwm4 theme; without one the flat frame stays.
+    ///
+    /// Config overrides are applied twice: before loading, because the palette
+    /// colours the XPM pixels; and after loading, because `themerc` is applied
+    /// inside [`Theme::load`] and would otherwise win over the user's settings.
     fn load_theme(config: &Config) -> Option<Theme> {
         let mut params = theme::ThemeParams::default();
-        for (symbol, value) in &config.decorations.palette {
-            if !params.palette.set(symbol, value) {
-                tracing::warn!(symbol, value, "unknown or unparsable palette override");
-            }
-        }
-        if let Some(layout) = &config.decorations.button_layout {
-            params.button_layout = layout.clone();
-        }
-        if let Some(spec) = &config.decorations.title_font {
-            params.title_font = crate::decor::text::TitleFont::parse(spec);
-        }
+        apply_theme_overrides(&mut params, config);
 
         let name = config
             .decorations
@@ -202,7 +196,16 @@ impl Mriya {
             .unwrap_or_else(|| "Default".to_string());
 
         match Theme::load(&name, params) {
-            Ok(loaded) => Some(loaded),
+            Ok(mut loaded) => {
+                apply_theme_overrides(&mut loaded.params, config);
+                tracing::debug!(
+                    theme = %loaded.name,
+                    button_layout = %loaded.params.button_layout,
+                    shadow_opacity = loaded.params.shadow_opacity,
+                    "theme settings applied"
+                );
+                Some(loaded)
+            }
             Err(_) => {
                 theme::warn_missing_theme(&name);
                 None
@@ -575,4 +578,26 @@ impl ClientData for ClientState {
 /// compare pixel by pixel).
 fn theme_fingerprint(theme: &Theme) -> (String, crate::decor::theme::ThemeParams) {
     (theme.name.clone(), theme.params.clone())
+}
+
+/// Settings from `decorations { ... }` that win over the theme.
+fn apply_theme_overrides(params: &mut crate::decor::theme::ThemeParams, config: &Config) {
+    for (symbol, value) in &config.decorations.palette {
+        if !params.palette.set(symbol, value) {
+            tracing::warn!(symbol, value, "unknown or unparsable palette override");
+        }
+    }
+    if let Some(layout) = &config.decorations.button_layout {
+        params.button_layout = layout.clone();
+    }
+    if let Some(spec) = &config.decorations.title_font {
+        params.title_font = crate::decor::text::TitleFont::parse(spec);
+    }
+    if let Some(opacity) = config.decorations.shadow_opacity {
+        params.shadow_opacity = opacity;
+    }
+    // `shadows false` is just opacity zero.
+    if config.decorations.shadows == Some(false) {
+        params.shadow_opacity = 0;
+    }
 }

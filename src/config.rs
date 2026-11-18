@@ -43,6 +43,10 @@ pub struct DecorationsConfig {
     pub button_layout: Option<String>,
     /// Palette overrides for the 24 xfwm4 colour symbols.
     pub palette: Vec<(String, String)>,
+    /// Draw drop shadows; `None` means "whatever the theme says".
+    pub shadows: Option<bool>,
+    /// Shadow opacity in percent, overriding the theme.
+    pub shadow_opacity: Option<u8>,
 }
 
 /// What to do with decorations for a matching window.
@@ -273,6 +277,13 @@ fn parse_decorations(node: &KdlNode, decorations: &mut DecorationsConfig) {
     for child in children.nodes() {
         match child.name().value() {
             "theme" => decorations.theme = first_string(child),
+            "shadows" => {
+                decorations.shadows = first_bool(child);
+            }
+            "shadow-opacity" => {
+                decorations.shadow_opacity =
+                    first_integer(child).and_then(|value| u8::try_from(value.clamp(0, 100)).ok());
+            }
             "title-font" => decorations.title_font = first_string(child),
             "button-layout" => decorations.button_layout = first_string(child),
             "palette" => {
@@ -485,6 +496,13 @@ fn first_string(node: &KdlNode) -> Option<String> {
         .map(str::to_string)
 }
 
+fn first_bool(node: &KdlNode) -> Option<bool> {
+    node.entries()
+        .iter()
+        .find(|entry| entry.name().is_none())
+        .and_then(|entry| entry.value().as_bool())
+}
+
 fn first_integer(node: &KdlNode) -> Option<i128> {
     node.entries()
         .iter()
@@ -531,6 +549,8 @@ layout {
 decorations {
     theme "Default"
     title-font "Sans Bold 9"
+    shadows true
+    shadow-opacity 30
     palette {
         active_color_2 "#336699"
         active_text_color "#ffffff"
@@ -588,6 +608,8 @@ binds {
         );
         assert_eq!(config.binds.len(), 6);
         assert_eq!(config.decorations.theme.as_deref(), Some("Default"));
+        assert_eq!(config.decorations.shadows, Some(true));
+        assert_eq!(config.decorations.shadow_opacity, Some(30));
         assert_eq!(
             config.decorations.title_font.as_deref(),
             Some("Sans Bold 9")

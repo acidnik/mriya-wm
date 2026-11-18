@@ -200,7 +200,12 @@ fn themed_elements(
             },
             &shadow.buffer,
             None,
-            None,
+            // `src` is in the texture's own pixels and has to cover it fully;
+            // giving only `size` would make the element sample outside of it.
+            Some(Rectangle::from_size(Size::from((
+                f64::from(shadow.source_size.0),
+                f64::from(shadow.source_size.1),
+            )))),
             Some(Size::from(shadow.draw_size)),
             Kind::Unspecified,
         ) {

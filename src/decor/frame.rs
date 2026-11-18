@@ -49,6 +49,8 @@ pub struct FrameTextures {
 #[derive(Debug)]
 pub struct ShadowTexture {
     pub offset: (i32, i32),
+    /// Size of the texture itself, in its own pixels.
+    pub source_size: (i32, i32),
     /// Size the shadow should be drawn at (it is built at a lower resolution).
     pub draw_size: (i32, i32),
     pub buffer: MemoryRenderBuffer,
@@ -57,8 +59,11 @@ pub struct ShadowTexture {
 /// Shadows are built at 1/N resolution: they are blurry anyway and this keeps
 /// rebuilding them during interactive resizes cheap.
 const SHADOW_SCALE: i32 = 4;
-/// Blur radius in shadow pixels.
+/// Box blur radius in shadow pixels; three passes approximate a gaussian.
 const SHADOW_RADIUS: i32 = 3;
+/// Padding around the silhouette: three box passes spread the blur by
+/// `3 * SHADOW_RADIUS`, and anything less clips the kernel into a hard edge.
+const SHADOW_PADDING: i32 = 3 * SHADOW_RADIUS + 1;
 /// Global opacity multiplier: blurring spreads the same energy over more pixels.
 const SHADOW_STRENGTH: f32 = 1.6;
 
@@ -103,11 +108,12 @@ fn frame_silhouette(
 }
 
 /// Downscale, blur and fade the silhouette into a shadow texture.
-fn build_shadow(
-    silhouette: &Canvas,
-    opacity: u8,
-    deltas: (i32, i32, i32, i32),
-) -> Option<ShadowTexture> {
+///
+/// `shadow_delta_*` from the theme are not applied: xfwm4 uses them together
+/// with its own gaussian offsets, and in this simpler model they only shift the
+/// shadow up and to the left, which reads as a misplaced rectangle rather than a
+/// drop shadow.
+fn build_shadow(silhouette: &Canvas, opacity: u8) -> Option<ShadowTexture> {
     if opacity == 0 || silhouette.width <= 0 || silhouette.height <= 0 {
         return None;
     }
@@ -115,11 +121,12 @@ fn build_shadow(
     let scale = SHADOW_SCALE;
     let width = (silhouette.width + scale - 1) / scale;
     let height = (silhouette.height + scale - 1) / scale;
-    let radius = SHADOW_RADIUS;
+    let padding = SHADOW_PADDING;
+    let stride = width + 2 * padding;
+    let padded_height = height + 2 * padding;
 
-    // Sampling the silhouette down and padding it by the blur radius.
-    let mut alpha = vec![0u8; ((width + 2 * radius) * (height + 2 * radius)) as usize];
-    let stride = width + 2 * radius;
+    // Sampling the silhouette down into the padded buffer.
+    let mut alpha = vec![0u8; (stride * padded_height) as usize];
     for y in 0..height {
         for x in 0..width {
             let mut sum = 0u32;
@@ -130,20 +137,19 @@ fn build_shadow(
                     count += 1;
                 }
             }
-            alpha[((y + radius) * stride + x + radius) as usize] = (sum / count) as u8;
+            alpha[((y + padding) * stride + x + padding) as usize] = (sum / count) as u8;
         }
     }
 
-    blur_alpha(&mut alpha, stride, height + 2 * radius, radius);
+    blur_alpha(&mut alpha, stride, padded_height);
 
     let opacity = f32::from(opacity) / 100.0 * SHADOW_STRENGTH;
-    let mut canvas = Canvas::new(stride, height + 2 * radius);
-    for y in 0..height + 2 * radius {
+    let mut canvas = Canvas::new(stride, padded_height);
+    for y in 0..padded_height {
         for x in 0..stride {
-            let value = f32::from(alpha[(y * stride + x) as usize]) * opacity;
-            let value = value.min(255.0) as u8;
-            if value > 0 {
-                canvas.blend(x, y, [0, 0, 0, value]);
+            let value = (f32::from(alpha[(y * stride + x) as usize]) * opacity).min(255.0);
+            if value >= 1.0 {
+                canvas.blend(x, y, [0, 0, 0, value as u8]);
             }
         }
     }
@@ -153,66 +159,60 @@ fn build_shadow(
         ?opacity,
         max_alpha,
         width = stride,
-        height = height + 2 * radius,
+        height = padded_height,
         "shadow composed"
     );
 
-    // xfwm4 draws the shadow at `SHADOW_OFFSET + delta` with the size
-    // `frame + gaussian - delta_width - delta`, where its gaussian padding plays
-    // the role of our `radius * scale` padding.
-    let (delta_x, delta_y, delta_width, delta_height) = deltas;
-    let padding = radius * scale;
-    let frame_width = silhouette.width;
-    let frame_height = silhouette.height;
     Some(ShadowTexture {
-        offset: (delta_x - padding, delta_y - padding),
-        draw_size: (
-            (frame_width + 2 * padding - delta_width - delta_x).max(1),
-            (frame_height + 2 * padding - delta_height - delta_y).max(1),
-        ),
+        offset: (-padding * scale, -padding * scale),
+        source_size: (stride, padded_height),
+        draw_size: (stride * scale, padded_height * scale),
         buffer: canvas.to_buffer(),
     })
 }
 
 /// Separable box blur, three passes approximate a gaussian well enough.
-fn blur_alpha(alpha: &mut [u8], stride: i32, height: i32, radius: i32) {
+///
+/// Outside of the buffer counts as zero and the divisor stays constant: skipping
+/// the out-of-bounds samples (and shrinking the divisor) is what produced bright
+/// rims and a hard rectangular edge around the shadow.
+fn blur_alpha(alpha: &mut [u8], stride: i32, height: i32) {
+    let radius = SHADOW_RADIUS;
     if radius <= 0 {
         return;
     }
     let width = stride;
+    let window = (2 * radius + 1) as u32;
     let mut scratch = vec![0u8; alpha.len()];
 
     for _ in 0..3 {
         // Horizontal.
         for y in 0..height {
+            let row = y * width;
             for x in 0..width {
                 let mut sum = 0u32;
-                let mut count = 0u32;
                 for dx in -radius..=radius {
                     let sx = x + dx;
                     if sx < 0 || sx >= width {
                         continue;
                     }
-                    sum += u32::from(alpha[(y * width + sx) as usize]);
-                    count += 1;
+                    sum += u32::from(alpha[(row + sx) as usize]);
                 }
-                scratch[(y * width + x) as usize] = (sum / count) as u8;
+                scratch[(row + x) as usize] = (sum / window) as u8;
             }
         }
         // Vertical.
-        for y in 0..height {
-            for x in 0..width {
+        for x in 0..width {
+            for y in 0..height {
                 let mut sum = 0u32;
-                let mut count = 0u32;
                 for dy in -radius..=radius {
                     let sy = y + dy;
                     if sy < 0 || sy >= height {
                         continue;
                     }
                     sum += u32::from(scratch[(sy * width + x) as usize]);
-                    count += 1;
                 }
-                alpha[(y * width + x) as usize] = (sum / count) as u8;
+                alpha[(y * width + x) as usize] = (sum / window) as u8;
             }
         }
     }
@@ -453,16 +453,7 @@ pub fn build(
         (width, height),
         geometry,
     );
-    let shadow = build_shadow(
-        &silhouette,
-        theme.params.shadow_opacity,
-        (
-            theme.params.shadow_delta_x,
-            theme.params.shadow_delta_y,
-            theme.params.shadow_delta_width,
-            theme.params.shadow_delta_height,
-        ),
-    );
+    let shadow = build_shadow(&silhouette, theme.params.shadow_opacity);
 
     FrameTextures {
         shadow,
