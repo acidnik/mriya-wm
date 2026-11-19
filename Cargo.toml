@@ -10,6 +10,7 @@ license = "MIT"
 anyhow = "1"
 bitflags = "2"
 cosmic-text = "0.17.0"
+cursor-icon = "1.2.0"
 image = { version = "0.25.6", default-features = false, features = ["png"] }
 inotify = "0.11.5"
 kdl = { version = "6.3.4", default-features = false, features = ["v1-fallback", "span"] }

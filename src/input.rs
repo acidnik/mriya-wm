@@ -18,13 +18,31 @@ use smithay::{
     utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER},
 };
 
+use smithay::input::pointer::CursorIcon;
+
 use crate::{
-    decor::{self, FrameButton, FramePart},
+    decor::{self, FrameButton, FrameHit, FramePart},
     grabs::{self, MoveSurfaceGrab, ResizeEdge, ResizeSurfaceGrab},
     keybindings::Action,
     shell,
     state::Mriya,
 };
+
+/// Cursor shape for a frame border.
+fn cursor_for_edge(edge: ResizeEdge) -> CursorIcon {
+    use ResizeEdge as E;
+    match edge {
+        e if e.contains(E::TOP | E::LEFT) => CursorIcon::NwResize,
+        e if e.contains(E::TOP | E::RIGHT) => CursorIcon::NeResize,
+        e if e.contains(E::BOTTOM | E::LEFT) => CursorIcon::SwResize,
+        e if e.contains(E::BOTTOM | E::RIGHT) => CursorIcon::SeResize,
+        e if e.contains(E::LEFT) => CursorIcon::WResize,
+        e if e.contains(E::RIGHT) => CursorIcon::EResize,
+        e if e.contains(E::TOP) => CursorIcon::NResize,
+        e if e.contains(E::BOTTOM) => CursorIcon::SResize,
+        _ => CursorIcon::Default,
+    }
+}
 
 /// Two clicks closer than this in time and space count as a double click.
 const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
@@ -280,6 +298,7 @@ impl Mriya {
                     return true;
                 }
 
+                tracing::debug!(?edge, ?location, content = ?Rectangle::new(hit.content_location, hit.content_size), "resize grab start");
                 let grab = ResizeSurfaceGrab::start(
                     grabs::start_data_at(location, button),
                     hit.window.clone(),
@@ -323,6 +342,50 @@ impl Mriya {
         true
     }
 
+    /// Cursor shape for the frame part under the pointer.
+    fn frame_cursor(&mut self, was_grabbed: bool) {
+        let hit = decor::hit_test(
+            self.theme.as_ref(),
+            &mut self.text,
+            &mut self.icons,
+            &self.space,
+            self.pointer_location,
+        );
+
+        let wanted = match &hit {
+            Some(FrameHit {
+                part: FramePart::Edge(edge),
+                ..
+            }) => Some(cursor_for_edge(*edge)),
+            Some(FrameHit {
+                part: FramePart::Titlebar | FramePart::Button(_),
+                ..
+            }) => Some(CursorIcon::Default),
+            // Over client content (or nothing): the client decides.
+            _ => None,
+        };
+
+        // Keep the shape while a grab is in progress: the pointer may be over
+        // the content during a resize.
+        if self.pointer_is_grabbed() {
+            return;
+        }
+        let _ = was_grabbed;
+
+        if self.cursor_override != wanted {
+            tracing::debug!(?wanted, part = ?hit.as_ref().map(|h| h.part), "cursor override changed");
+            self.cursor_override = wanted;
+            self.request_redraw();
+        }
+    }
+
+    fn pointer_is_grabbed(&self) -> bool {
+        self.seat
+            .get_pointer()
+            .map(|pointer| pointer.is_grabbed())
+            .unwrap_or(false)
+    }
+
     /// Track which titlebar button the pointer is over, for hover states.
     fn update_frame_hover(&mut self) {
         let hit = decor::hit_test(
@@ -357,19 +420,20 @@ impl Mriya {
         if changed {
             self.request_redraw();
         }
+
+        self.frame_cursor(false);
     }
 
     fn clear_focus(&mut self, serial: Serial) {
         for window in self.space.elements() {
             decor::state_mut(window).active = false;
-            let Some(toplevel) = window.toplevel() else {
+            if window.toplevel().is_none() {
                 continue;
-            };
-            toplevel.with_pending_state(|state| {
+            }
+            self.send_configure(window, |state| {
                 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
                 state.states.unset(xdg_toplevel::State::Activated);
             });
-            toplevel.send_pending_configure();
         }
 
         self.seat

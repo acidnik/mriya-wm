@@ -164,7 +164,10 @@ impl NestedRenderer {
     pub(crate) fn draw(&mut self, state: &mut Mriya) -> Result<()> {
         let scale = self.output.current_scale().fractional_scale();
         let cursor_position = state.pointer_location;
-        let cursor_status = state.cursor_status.clone();
+        let cursor_status = match state.cursor_override {
+            Some(icon) => smithay::input::pointer::CursorImageStatus::Named(icon),
+            None => state.cursor_status.clone(),
+        };
         let age = if self.full_redraw > 0 {
             0
         } else {

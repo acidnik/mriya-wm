@@ -6,7 +6,7 @@ use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{
         keyboard::{xkb, Keycode, Keysym},
-        pointer::CursorImageStatus,
+        pointer::{CursorIcon, CursorImageStatus},
         Seat, SeatState,
     },
     reexports::{
@@ -56,6 +56,9 @@ pub struct Mriya {
     pub pointer_location: Point<f64, Logical>,
     /// Cursor image requested by the focused client.
     pub cursor_status: CursorImageStatus,
+    /// Shape the window manager wants regardless of the client (window frame
+    /// edges and titlebar): `None` means "use what the client asked for".
+    pub cursor_override: Option<CursorIcon>,
     /// Keys of shortcuts we intercepted on press, so the matching release is
     /// not forwarded to the client.
     pub suppressed_keys: Vec<Keycode>,
@@ -155,6 +158,7 @@ impl Mriya {
             popups: PopupManager::default(),
             pointer_location: (0.0, 0.0).into(),
             cursor_status: CursorImageStatus::default_named(),
+            cursor_override: None,
             suppressed_keys: Vec::new(),
             needs_redraw: true,
             renderer: None,
@@ -331,6 +335,13 @@ impl Mriya {
     /// Recompute the decoration mode of a window: a rule may force it, the
     /// client may have asked, or it may bring its own decorations.
     pub fn update_decoration_mode(&mut self, window: &Window) {
+        // A request made before the window existed lives on the surface only.
+        if let Some(surface) = window.toplevel().map(|toplevel| toplevel.wl_surface()) {
+            if let Some(requested) = decor::protocol::requested_decoration(surface) {
+                decor::state_mut(window).requested_mode = requested;
+            }
+        }
+
         let detected = decor::detects_client_decorations(window);
 
         let changed = {
@@ -357,6 +368,29 @@ impl Mriya {
     }
 
     /// Tell the client the effective mode, after a rule or a detection change.
+    /// Send a configure for a window, always carrying the effective decoration
+    /// mode.
+    ///
+    /// Smithay fills in `ClientSide` for a configure that does not mention the
+    /// mode, so a plain "size" or "activated" configure would tell every client
+    /// to draw its own frame - a terminal would then reserve space for a
+    /// titlebar it does not get, leaving a gap under the window.
+    pub fn send_configure(
+        &self,
+        window: &Window,
+        edit: impl FnOnce(&mut smithay::wayland::shell::xdg::ToplevelState),
+    ) {
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let mode = decor::state(window).mode;
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(mode);
+            edit(state);
+        });
+        toplevel.send_pending_configure();
+    }
+
     pub fn sync_decoration_mode(&mut self, window: &Window) {
         let mode = decor::state(window).mode;
         if let Some(toplevel) = window.toplevel() {
@@ -525,10 +559,10 @@ impl Mriya {
         for other in self.space.elements() {
             let focused = other == window;
             decor::state_mut(other).active = focused;
-            let Some(other_toplevel) = other.toplevel() else {
+            if other.toplevel().is_none() {
                 continue;
-            };
-            other_toplevel.with_pending_state(|state| {
+            }
+            self.send_configure(other, |state| {
                 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
                 if focused {
                     state.states.set(xdg_toplevel::State::Activated);
@@ -536,7 +570,6 @@ impl Mriya {
                     state.states.unset(xdg_toplevel::State::Activated);
                 }
             });
-            other_toplevel.send_pending_configure();
         }
 
         tracing::trace!(surface = ?toplevel.wl_surface().id(), "setting keyboard focus");

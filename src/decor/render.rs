@@ -243,6 +243,12 @@ fn themed_elements(
         }
     };
 
+    tracing::debug!(
+        app_id = %state(window).app_id,
+        active = frame_state.active,
+        outer = ?outer.loc,
+        "frame drawn"
+    );
     push(&textures.titlebar, outer.loc);
     for (x, y, buffer) in &textures.overlays {
         push(buffer, Point::from((outer.loc.x + x, outer.loc.y + y)));

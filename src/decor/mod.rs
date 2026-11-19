@@ -275,6 +275,11 @@ fn geometry_looks_inset(
     geometry: Rectangle<i32, Logical>,
     surface: Rectangle<i32, Logical>,
 ) -> bool {
+    // Before the first buffer commit both rectangles are empty; a client that
+    // has not drawn anything yet is not evidence of anything.
+    if surface.size.w <= 0 || surface.size.h <= 0 {
+        return false;
+    }
     geometry.loc != Point::from((0, 0)) || geometry.size != surface.size
 }
 
@@ -591,6 +596,17 @@ mod tests {
     fn full_surface_geometry_means_no_client_decorations() {
         let surface = Rectangle::new(Point::from((0, 0)), Size::from((696, 496)));
         assert!(!geometry_looks_inset(surface, surface));
+    }
+
+    #[test]
+    fn empty_surface_is_not_a_client_decoration_signal() {
+        // Before the first buffer commit both rectangles are empty: a client
+        // that asked for server-side decorations must not be flipped to
+        // client-side because nothing has been drawn yet.
+        let empty = Rectangle::new(Point::from((0, 0)), Size::from((0, 0)));
+        assert!(!geometry_looks_inset(empty, empty));
+        let geometry = Rectangle::new(Point::from((0, 0)), Size::from((696, 496)));
+        assert!(!geometry_looks_inset(geometry, empty));
     }
 
     #[test]

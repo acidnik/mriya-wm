@@ -1030,6 +1030,7 @@ dependencies = [
  "anyhow",
  "bitflags 2.13.2",
  "cosmic-text",
+ "cursor-icon",
  "image",
  "inotify",
  "kdl 6.7.1",

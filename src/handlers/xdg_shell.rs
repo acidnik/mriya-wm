@@ -46,6 +46,7 @@ impl XdgShellHandler for Mriya {
             FrameGeometry::of(self.theme.as_ref(), &decor::state(&window)).content_offset();
         let location = shell::location_for_new_window(&self.space) + content_offset;
         self.space.map_element(window.clone(), location, false);
+        tracing::debug!(location = ?location, "toplevel mapped");
         self.focus_window(&window);
         self.request_redraw();
     }
@@ -136,10 +137,9 @@ impl XdgShellHandler for Mriya {
         };
         let initial_window_size = window.geometry().size;
 
-        surface.with_pending_state(|state| {
+        self.send_configure(&window, |state| {
             state.states.set(xdg_toplevel::State::Resizing);
         });
-        surface.send_pending_configure();
 
         let grab = ResizeSurfaceGrab::start(
             start_data,

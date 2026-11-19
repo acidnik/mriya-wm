@@ -136,12 +136,19 @@ impl PointerGrab<Mriya> for ResizeSurfaceGrab {
             new_window_height.max(min_height).min(max_height),
         ));
 
-        let xdg = self.window.toplevel().unwrap();
-        xdg.with_pending_state(|state| {
+        tracing::debug!(
+            start = ?self.start_data.location,
+            now = ?event.location,
+            ?delta,
+            ?self.edges,
+            initial = ?self.initial_rect,
+            new = ?self.last_window_size,
+            "resize motion"
+        );
+        data.send_configure(&self.window, |state| {
             state.states.set(xdg_toplevel::State::Resizing);
             state.size = Some(self.last_window_size);
         });
-        xdg.send_pending_configure();
     }
 
     fn relative_motion(
@@ -165,19 +172,20 @@ impl PointerGrab<Mriya> for ResizeSurfaceGrab {
         if !handle.current_pressed().contains(&BTN_LEFT) {
             handle.unset_grab(self, data, event.serial, event.time, true);
 
-            let xdg = self.window.toplevel().unwrap();
-            xdg.with_pending_state(|state| {
+            data.send_configure(&self.window, |state| {
                 state.states.unset(xdg_toplevel::State::Resizing);
                 state.size = Some(self.last_window_size);
             });
-            xdg.send_pending_configure();
 
-            ResizeSurfaceState::with(xdg.wl_surface(), |state| {
-                *state = ResizeSurfaceState::WaitingForLastCommit {
-                    edges: self.edges,
-                    initial_rect: self.initial_rect,
-                };
-            });
+            ResizeSurfaceState::with(
+                &self.window.toplevel().unwrap().wl_surface().clone(),
+                |state| {
+                    *state = ResizeSurfaceState::WaitingForLastCommit {
+                        edges: self.edges,
+                        initial_rect: self.initial_rect,
+                    };
+                },
+            );
         }
     }
 
