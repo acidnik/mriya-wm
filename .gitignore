@@ -1,3 +1,6 @@
 /target
 /tmp
 /aur
+contrib/src
+contrib/pkg
+contrib/*.pkg.tar.zst

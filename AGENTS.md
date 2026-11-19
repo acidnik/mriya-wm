@@ -44,6 +44,25 @@ AUR: <https://aur.archlinux.org/packages/mriya-wm> (maintainer `acidnik`).
   в `.gitignore`, в основную историю не попадает; в нём лежат `PKGBUILD` и
   сгенерированный `.SRCINFO`.
 
+### Быстрая сборка для разработки (без AUR)
+
+Пока идёт работа над бэкендом, публиковать каждый коммит в AUR не нужно:
+
+```sh
+git pull
+cd contrib && makepkg -si -p PKGBUILD.dev     # собирает из этого дерева
+```
+
+`contrib/PKGBUILD.dev` берёт `pkgver` из `Cargo.toml`, собирает `cargo build
+--release --locked` в текущем дереве и ставит те же файлы, что и AUR-пакет.
+`contrib/src`, `contrib/pkg` и `*.pkg.tar.zst` в `.gitignore`.
+
+Если удобнее вообще без чек-аута — можно однажды залить в AUR пакет
+`mriya-wm-git` (VCS-пакет собирает мастер-ветку), тогда хватит `paru -Syu`.
+Пока его нет: dev-PKGBUILD проще и не требует обновлять пин на каждый коммит.
+
+### Публикация в AUR (когда нужен релиз)
+
 Порядок обновления:
 
 1. Поднять версию: `pkgver` в `contrib/PKGBUILD` (и `version` в `Cargo.toml`).

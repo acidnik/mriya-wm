@@ -1,0 +1,41 @@
+# dev-вариант: собирает пакет из этого рабочего дерева, а не из GitHub.
+#
+#   git pull && cd contrib && makepkg -si -p PKGBUILD.dev
+#
+# Для AUR по-прежнему используется contrib/PKGBUILD (источник с пином на коммит).
+
+pkgname=mriya-wm
+# Версия всегда берётся из Cargo.toml, чтобы не расходилась.
+pkgver=$(sed -n 's/^version = "\(.*\)"/\1/p' "$startdir/../Cargo.toml" | head -1)
+pkgrel=1
+pkgdesc="Stacking Wayland window manager with xfwm4 window decorations"
+arch=('x86_64')
+url="https://github.com/acidnik/mriya-wm"
+license=('MIT')
+depends=('libxkbcommon' 'mesa' 'wayland' 'fontconfig' 'freetype2')
+optdepends=('xcursor-themes: cursor themes for the compositor to load')
+makedepends=('cargo' 'git')
+source=()
+sha256sums=()
+
+build() {
+    cd "$startdir/.."
+    # Свой target/ и CARGO_HOME, как у makepkg принято.
+    export CARGO_TARGET_DIR="$startdir/../target"
+    cargo build --release --locked
+}
+
+check() {
+    cd "$startdir/.."
+    ./target/release/mriya-wm --help >/dev/null
+}
+
+package() {
+    cd "$startdir/.."
+
+    install -Dm755 target/release/mriya-wm "$pkgdir/usr/bin/mriya-wm"
+    install -Dm755 dist/mriya-session "$pkgdir/usr/bin/mriya-session"
+    install -Dm644 dist/mriya.desktop \
+        "$pkgdir/usr/share/wayland-sessions/mriya.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
