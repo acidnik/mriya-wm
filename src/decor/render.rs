@@ -249,10 +249,11 @@ fn themed_elements(
         outer = ?outer.loc,
         "frame drawn"
     );
+    // Frame first, then everything that sits on top of it. xfwm4 stacks the
+    // buttons above the border: `RedmondXP` keeps its close button two pixels
+    // from the outer edge, so the right border and the corner image would cut
+    // into it.
     push(&textures.titlebar, outer.loc);
-    for (x, y, buffer) in &textures.overlays {
-        push(buffer, Point::from((outer.loc.x + x, outer.loc.y + y)));
-    }
 
     let side_height = (outer.size.h - geometry.top - geometry.bottom).max(0);
     let _ = side_height;
@@ -277,6 +278,10 @@ fn themed_elements(
             &corner.buffer,
             Point::from((outer.loc.x + corner.x, outer.loc.y + corner.y)),
         );
+    }
+
+    for (x, y, buffer) in &textures.overlays {
+        push(buffer, Point::from((outer.loc.x + x, outer.loc.y + y)));
     }
 
     result
