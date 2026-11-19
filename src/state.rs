@@ -20,11 +20,15 @@ use smithay::{
     utils::{Logical, Point, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        cursor_shape::CursorShapeManagerState,
+        fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
-        selection::data_device::DataDeviceState,
+        selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{decoration::XdgDecorationState, ToplevelSurface, XdgShellState},
         shm::ShmState,
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
+        xdg_activation::XdgActivationState,
     },
 };
 
@@ -104,6 +108,18 @@ pub struct Mriya {
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Mriya>,
     pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    #[allow(dead_code)]
+    pub cursor_shape_state: CursorShapeManagerState,
+    pub activation_state: XdgActivationState,
+    /// Kept alive so the `wp_fractional_scale_manager_v1` global stays
+    /// advertised; the per-surface state lives in the surface itself.
+    #[allow(dead_code)]
+    pub fractional_scale_state: FractionalScaleManagerState,
+    /// Kept alive so the `wp_viewporter` global is advertised; the viewport is
+    /// per surface and applied by the renderer.
+    #[allow(dead_code)]
+    pub viewporter_state: ViewporterState,
     pub seat: Seat<Self>,
 }
 
@@ -117,6 +133,16 @@ impl Mriya {
         let shm_state = ShmState::new::<Self>(&display_handle, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&display_handle);
+        let cursor_shape_state = CursorShapeManagerState::new::<Self>(&display_handle);
+        let activation_state = XdgActivationState::new::<Self>(&display_handle);
+        let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&display_handle);
+        let viewporter_state = ViewporterState::new::<Self>(&display_handle);
+        // `xdg-toplevel-icon` keeps no compositor-side state: the icon lives in
+        // the surface's cached state.
+        let _ = smithay::wayland::xdg_toplevel_icon::XdgToplevelIconManager::new::<Self>(
+            &display_handle,
+        );
         let mut seat_state = SeatState::new();
 
         let mut seat = seat_state.new_wl_seat(&display_handle, "mriya");
@@ -180,6 +206,11 @@ impl Mriya {
             output_manager_state,
             seat_state,
             data_device_state,
+            primary_selection_state,
+            cursor_shape_state,
+            activation_state,
+            fractional_scale_state,
+            viewporter_state,
             seat,
         }
     }
@@ -313,7 +344,7 @@ impl Mriya {
         }
     }
 
-    fn invalidate_window_frame(&self, window: &Window) {
+    pub fn invalidate_window_frame(&self, window: &Window) {
         if let Some(cache) = window
             .user_data()
             .get::<std::cell::RefCell<Option<crate::decor::frame::CachedFrame>>>()

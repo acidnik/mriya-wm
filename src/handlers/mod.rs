@@ -1,5 +1,6 @@
 //! Protocol implementations for [`Mriya`].
 
+mod compat;
 mod compositor;
 mod xdg_shell;
 
@@ -14,7 +15,7 @@ use smithay::{
                 set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
                 ServerDndGrabHandler,
             },
-            SelectionHandler,
+            SelectionHandler, SelectionSource, SelectionTarget,
         },
     },
 };
@@ -41,7 +42,15 @@ impl SeatHandler for Mriya {
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let display_handle = &self.display_handle;
         let client = focused.and_then(|surface| display_handle.get_client(surface.id()).ok());
-        set_data_device_focus(display_handle, seat, client);
+        set_data_device_focus(display_handle, seat, client.clone());
+        // Primary selection follows the keyboard focus the same way; without it
+        // no client is ever offered a selection and middle-click paste does
+        // nothing.
+        smithay::wayland::selection::primary_selection::set_primary_focus(
+            display_handle,
+            seat,
+            client,
+        );
     }
 }
 
@@ -49,6 +58,15 @@ delegate_seat!(Mriya);
 
 impl SelectionHandler for Mriya {
     type SelectionUserData = ();
+
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        tracing::debug!(?ty, owner = source.is_some(), "selection changed");
+    }
 }
 
 impl DataDeviceHandler for Mriya {

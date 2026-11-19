@@ -11,6 +11,11 @@ use std::{
     sync::Arc,
 };
 
+use smithay::{
+    desktop::Window,
+    reexports::wayland_server::protocol::wl_shm,
+    wayland::{shm::with_buffer_contents, xdg_toplevel_icon::ToplevelIconCachedState},
+};
 use tracing::debug;
 
 use super::theme::ThemeImage;
@@ -54,6 +59,27 @@ impl IconCache {
         }
         self.icons.insert(app_id.to_string(), icon.clone());
         icon
+    }
+
+    /// Icon the client itself asked for over `xdg-toplevel-icon`.
+    ///
+    /// Clients may send pixel data (most toolkits only send a name, which is the
+    /// same one looked up here anyway).
+    pub fn from_toplevel(window: &Window) -> Option<ThemeImage> {
+        let surface = window.toplevel()?.wl_surface().clone();
+        let buffers = smithay::wayland::compositor::with_states(&surface, |states| {
+            states
+                .cached_state
+                .get::<ToplevelIconCachedState>()
+                .current()
+                .buffers()
+                .to_vec()
+        });
+        // The largest scale is the sharpest icon on any output.
+        buffers
+            .into_iter()
+            .max_by_key(|(_, scale)| *scale)
+            .and_then(|(buffer, _)| shm_buffer_image(&buffer))
     }
 
     fn load(&self, app_id: &str) -> Option<ThemeImage> {
@@ -265,6 +291,55 @@ fn data_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(dir));
     }
     dirs
+}
+
+/// Copy a client-provided `wl_shm` icon buffer into an RGBA image.
+///
+/// `wl_shm` pixels are premultiplied and the canvases here use straight alpha,
+/// so the colour channels are divided back out.
+fn shm_buffer_image(
+    buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+) -> Option<ThemeImage> {
+    with_buffer_contents(buffer, |ptr, len, data| {
+        let opaque = match data.format {
+            wl_shm::Format::Argb8888 => false,
+            wl_shm::Format::Xrgb8888 => true,
+            other => {
+                debug!(?other, "unsupported icon buffer format");
+                return None;
+            }
+        };
+        let (width, height, stride) = (data.width, data.height, data.stride);
+        if width <= 0 || height <= 0 || stride < width * 4 {
+            return None;
+        }
+
+        // Safety: the shm pool outlives this callback and every read below stays
+        // inside it.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let start = data.offset as usize;
+        let row = width as usize * 4;
+        let mut pixels = Vec::with_capacity(row * height as usize);
+        for y in 0..height as usize {
+            let offset = start + y * stride as usize;
+            if offset + row > bytes.len() {
+                return None;
+            }
+            for pixel in bytes[offset..offset + row].chunks_exact(4) {
+                let (r, g, b, a) = (pixel[2], pixel[1], pixel[0], pixel[3]);
+                if opaque || a == 0 || a == 255 {
+                    pixels.extend_from_slice(&[r, g, b, if opaque { 255 } else { a }]);
+                    continue;
+                }
+                let un = |channel: u8| (u32::from(channel) * 255 / u32::from(a)).min(255) as u8;
+                pixels.extend_from_slice(&[un(r), un(g), un(b), a]);
+            }
+        }
+
+        Some(ThemeImage::new(width, height, pixels))
+    })
+    .ok()
+    .flatten()
 }
 
 #[cfg(test)]

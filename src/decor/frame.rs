@@ -332,6 +332,9 @@ pub fn textures<'a>(
         .map(|cached| cached.key != key)
         .unwrap_or(true);
     if needs_build {
+        // A client-provided icon (`xdg-toplevel-icon`) wins over the one looked
+        // up from the desktop file.
+        let client_icon = super::icons::IconCache::from_toplevel(window);
         let textures = build(
             theme,
             text,
@@ -339,6 +342,7 @@ pub fn textures<'a>(
             state,
             (outer_size.w, outer_size.h),
             geometry,
+            client_icon,
         );
         *cell.borrow_mut() = Some(CachedFrame { key, textures });
     }
@@ -359,6 +363,7 @@ pub fn build(
     state: &FrameState,
     outer_size: (i32, i32),
     geometry: FrameGeometry,
+    client_icon: Option<ThemeImage>,
 ) -> FrameTextures {
     let (width, height) = outer_size;
     let active = state.active;
@@ -391,7 +396,11 @@ pub fn build(
     // has to start after it, otherwise a left-aligned title runs underneath.
     let icon_side = (geometry.top - 6).max(8).min(geometry.top - 2);
     let icon = (theme.params.show_app_icon && theme.params.button_layout.contains('O'))
-        .then(|| icons.get(&state.app_id))
+        .then(|| {
+            client_icon
+                .map(std::sync::Arc::new)
+                .or_else(|| icons.get(&state.app_id))
+        })
         .flatten()
         .map(|icon| {
             let x = geometry.left + theme.params.button_offset + 2;
@@ -820,6 +829,7 @@ mod tests {
             &state(),
             (200, 100),
             geometry,
+            None,
         );
         // The texture covers the whole frame width; corners sit on top of it.
         assert_eq!(textures.titlebar_mask.width, 200);
@@ -845,6 +855,7 @@ mod tests {
             &state(),
             (200, 100),
             geometry,
+            None,
         );
 
         assert!(!frame_opaque(&textures, geometry, (200, 100), 0, 0));

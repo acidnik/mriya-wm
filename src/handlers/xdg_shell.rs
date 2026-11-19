@@ -39,6 +39,8 @@ impl XdgShellHandler for Mriya {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        // Clients only get their scale once, before the first commit.
+        self.apply_surface_scale(surface.wl_surface());
         let window = Window::new_wayland_window(surface);
         // The frame is drawn around the content area, so the cascade position
         // applies to the frame and the content moves inside it.
