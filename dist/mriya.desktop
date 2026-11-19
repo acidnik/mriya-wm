@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Mriya
+Comment=Stacking Wayland window manager with xfwm4 themes
+Exec=mriya-session
+Type=Application
+DesktopNames=Mriya

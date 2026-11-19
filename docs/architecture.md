@@ -568,6 +568,31 @@ management`, `idle_inhibitor` — `zwp_idle_inhibit_manager_v1`. Все три �
 4. Автоперезагрузка конфига (inotify).
 5. `text-input` (IME): нужен ещё `zwp_input_method_v2` и отрисовка всплывающего
    окна IME.
-6. udev/DRM-бэкенд для запуска на TTY; вместе с ним — настройки устройств
-   ввода из конфига.
+6. udev/DRM-бэкенд для запуска на TTY (единственное, что мешает самостоятельной
+   сессии). Что для него нужно, по образцу `anvil/src/udev.rs` (там ~1700 строк):
+
+   - фичи smithay: `backend_udev`, `backend_drm`, `backend_gbm`,
+     `backend_libinput`, `backend_session_libseat`, `renderer_multi`, плюс
+     контейнер `udev` и `gbm`/`drm` из реэкспортов smithay;
+   - сессия через logind/seatd (`LibSeatSession::new()`), обработка
+     `PauseSession`/`ActivateSession` при переключении VT: на паузе надо сносить
+     `DrmSurface` и всё, что с ним связано, на активации — создавать заново;
+   - `UdevBackend` (монитор устройств) → `device_added`/`device_removed`/
+     `device_changed`; `LibinputInputBackend` поверх того же
+     `process_input_event`, что и winit;
+   - на каждый подключённый коннектор: `DrmSurface` + `DrmCompositor` (mode
+     из `connector::Info`), `Output` с mode/scale, `space.map_output`,
+     `layers::arrange`;
+   - кадр: собрать элементы как в `nested.rs` (окна + рамки + слои + курсор),
+     `DrmCompositor::render_frame`, `queue_frame`, по `DrmEvent::VBlank` —
+     `frame_submitted`, `send_frame` клиентам и следующий кадр;
+   - бэкенд сейчас прибит к winit (`Mriya::renderer: Option<NestedRenderer>`),
+     поэтому сначала нужен общий интерфейс (enum или трейт) с двумя
+     реализациями: `Nested` и `Udev`;
+   - проверять это можно только на реальном VT: из вложенной сессии DRM-master
+     не получить, а забрать карту у чужой сессии значит погасить экран.
+
+   Порядок проверки: запускать `mriya-wm --drm` с TTY (Ctrl+Alt+F2 всегда
+   возвращает в обычную сессию), и только когда заработает — ставить
+   `dist/mriya.desktop` в greeter.
 7. XWayland — чтобы запускать X11-приложения.

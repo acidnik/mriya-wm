@@ -1,0 +1,33 @@
+#!/bin/sh
+# Start Mriya as a standalone Wayland session, the way a display manager does.
+#
+# Installed as /usr/local/bin/mriya-session; the greeter entry in
+# /usr/share/wayland-sessions/mriya.desktop points at it.
+
+# A login shell is what other sessions use to pick up the user's PATH and
+# profile. Re-exec ourselves once with it and drop the marker argument.
+if [ "$1" != "-l" ] && [ -n "$SHELL" ] && grep -qx "$SHELL" /etc/shells; then
+    exec "$SHELL" -lc "exec '$0' -l"
+fi
+[ "$1" = "-l" ] && shift
+
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=mriya
+export XDG_CURRENT_DESKTOP=Mriya
+
+# Toolkits that still need a nudge to use Wayland.
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=wayland
+export SDL_VIDEODRIVER=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# D-Bus-activated services do not inherit this script's environment, so hand it
+# over explicitly (systemd before the session starts, then D-Bus).
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment 2>/dev/null || true
+fi
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --all 2>/dev/null || true
+fi
+
+exec mriya-wm "$@"

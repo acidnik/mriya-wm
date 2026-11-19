@@ -33,3 +33,19 @@ Panels: `zwlr_layer_shell_v1` is supported (panels, bars, wallpapers reserve
 their space), so waybar works. A compositor-agnostic waybar config and style
 live in [examples/waybar](examples/waybar).
 
+## Standalone session
+
+Right now Mriya only has the nested backend: it runs as a window inside another
+session. Running it from a display manager needs the DRM/udev backend (see
+[docs/architecture.md](docs/architecture.md#следующие-шаги)), which is not
+written yet. The session plumbing is ready in [dist](dist):
+
+```sh
+sudo install -Dm755 dist/mriya-session /usr/local/bin/mriya-session
+sudo install -Dm644 dist/mriya.desktop /usr/share/wayland-sessions/mriya.desktop
+```
+
+After that the greeter lists "Mriya" next to the other sessions. The compositor
+also has to detect that it was started on a VT and drive the DRM device then
+instead of opening a window.
+
