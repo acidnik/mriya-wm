@@ -91,11 +91,129 @@ fn main() -> Result<()> {
 }
 
 fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
+    use std::io::Write as _;
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mriya_wm=debug"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    // A session started by a display manager has no terminal, so errors are lost
+    // unless they also go into a file. `MRIYA_LOG_FILE` overrides the path; a
+    // real terminal (a manual `mriya-wm` run) keeps stderr only, unless asked.
+    let on_terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let path = std::env::var_os("MRIYA_LOG_FILE")
+        .map(std::path::PathBuf::from)
+        .or_else(|| (!on_terminal).then(session_log_path).flatten());
+
+    let file = path.as_ref().and_then(|path| match open_log_file(path) {
+        Ok(file) => Some(file),
+        Err(err) => {
+            eprintln!("mriya-wm: cannot write {}: {err}", path.display());
+            None
+        }
+    });
+
+    let stderr_layer = fmt::layer().with_writer(std::io::stderr);
+    match file {
+        Some(file) => {
+            let path = path.expect("the file came from a path");
+            let file_layer = fmt::layer()
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file));
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stderr_layer)
+                .with(file_layer)
+                .init();
+            tracing::info!(path = %path.display(), "logging to this file as well");
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stderr_layer)
+                .init();
+        }
+    }
+    let _ = std::io::stderr().flush();
+}
+
+/// Where a session started without a terminal writes its log.
+///
+/// `/tmp` is what one looks at after a session failed to start, but a fixed name
+/// there is a symlink target someone else could plant before we ever run. The
+/// file is therefore named after the user, opened with mode 0600 and only
+/// appended to when it is a regular file that we own.
+fn session_log_path() -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+
+    let user = std::env::var("USER")
+        .ok()
+        .or_else(|| {
+            let home = std::env::var_os("HOME")?;
+            std::path::Path::new(&home)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "user".to_string());
+    let user: String = user
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+
+    let candidate = std::path::PathBuf::from(format!("/tmp/mriya-{user}.log"));
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(meta) if meta.file_type().is_file() => {
+            // Owned by us? Otherwise someone else's file, keep away.
+            let ours = std::env::var_os("HOME")
+                .and_then(|home| std::fs::metadata(home).ok())
+                .map(|home| home.uid());
+            if ours != Some(meta.uid()) {
+                // Tracing is not initialised yet, so this goes to stderr.
+                eprintln!(
+                    "mriya-wm: {} belongs to another user, logging to the state directory",
+                    candidate.display()
+                );
+                return state_log_path();
+            }
+            Some(candidate)
+        }
+        Ok(_) => {
+            eprintln!(
+                "mriya-wm: {} is not a regular file, logging to the state directory",
+                candidate.display()
+            );
+            state_log_path()
+        }
+        Err(_) => Some(candidate),
+    }
+}
+
+fn state_log_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/state"))
+        })?;
+    let dir = base.join("mriya");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("mriya.log"))
+}
+
+/// Open the log for appending, refusing anything that is not a plain file.
+fn open_log_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true).mode(0o600);
+    // Keep a session log from growing without bound; a failed start is what one
+    // looks for, and that is at the top of the current run anyway.
+    if std::fs::metadata(path)
+        .map(|meta| meta.len() > 8 * 1024 * 1024)
+        .unwrap_or(false)
+    {
+        options.truncate(true).append(false).write(true);
+    }
+    options.open(path)
 }
 
 /// Config shipped with the compositor, written to the user's config directory

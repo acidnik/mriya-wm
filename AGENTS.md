@@ -54,6 +54,11 @@ output`. Ошибки `cannot open …` / `cannot become drm master` обычн�
 
 Отладка на конкретной карте: `MRIYA_DRM_DEVICE=/dev/dri/card1`.
 
+Логи сессии: если stderr не терминал (так запускает display manager), вывод
+дублируется в `/tmp/mriya-<user>.log` (0600, владелец проверяется; если файл
+подсунут чужим или это симлинк — пишем в `~/.local/state/mriya/mriya.log`).
+Другой путь — `MRIYA_LOG_FILE=/path`. Из TTY (stderr — терминал) файла нет.
+
 Экран и ввод в логе: `output scale connector=eDP-1 scale=2` (масштаб из DPI или
 из `output { scale }`), `output frame queued frames=1` (кадр реально ушёл в
 скан-аут), `cannot apply the input setting` (libinput не принял настройку

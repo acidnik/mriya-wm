@@ -29,6 +29,10 @@ are implemented; other niri sections are ignored for now.
 See [docs/architecture.md](docs/architecture.md) for the code layout, keybindings
 and next steps (the doc is in Russian).
 
+Session logs: when started without a terminal (from a display manager) the log
+is written to `/tmp/mriya-<user>.log` (0600) as well as to stderr; set
+`MRIYA_LOG_FILE` to choose another path.
+
 The first start writes a default config to `~/.config/mriya/config.kdl` (the
 copy that ships with the package is `/usr/share/mriya/config.kdl`, with a
 documented example next to it in `example-config.kdl`), so a fresh session is not
