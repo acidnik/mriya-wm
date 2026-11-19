@@ -99,15 +99,28 @@ pub fn scene_elements(
         );
         // Shadow (and the flat fallback background) below the client surface.
         elements.extend(frame.below);
-        elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
-            NestedRenderElement<GlesRenderer>,
-        >(
-            window,
-            renderer,
-            content_location.to_physical_precise_round(output_scale),
-            output_scale,
-            1.0,
-        ));
+        let content =
+            AsRenderElements::<GlesRenderer>::render_elements::<NestedRenderElement<GlesRenderer>>(
+                window,
+                renderer,
+                content_location.to_physical_precise_round(output_scale),
+                output_scale,
+                1.0,
+            );
+        if trace_elements() {
+            use smithay::backend::renderer::element::Element;
+            let rects: Vec<_> = content
+                .iter()
+                .map(|element| element.geometry(output_scale))
+                .collect();
+            tracing::info!(
+                app_id = %decor::state(window).app_id,
+                count = content.len(),
+                ?rects,
+                "window content elements"
+            );
+        }
+        elements.extend(content);
         // Titlebar, buttons, borders above it: a client surface can be larger
         // than its reported geometry.
         elements.extend(frame.above);
@@ -137,3 +150,11 @@ fn panel_elements(
 }
 
 use smithay::backend::renderer::element::AsRenderElements;
+
+/// Debug switch: `MRIYA_TRACE_ELEMENTS=1` logs what each window contributes to
+/// the frame, which is how a window that draws nothing is told apart from one
+/// whose client never sent a buffer.
+fn trace_elements() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("MRIYA_TRACE_ELEMENTS").is_some())
+}

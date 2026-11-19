@@ -469,6 +469,16 @@ pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Resul
         }
     }
 
+    // Started from a TTY there is no session bus: GTK apps then fail to register
+    // (Firefox on its first run can stay black), portals and notifications do
+    // not work. `mriya-session` sets this up; a manual `--drm` run does not.
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        tracing::warn!(
+            "no D-Bus session bus: start with `dbus-run-session mriya-wm --drm` \
+             (or through mriya-session) if applications misbehave"
+        );
+    }
+
     let (session, notifier) = LibSeatSession::new()
         .map_err(|err| anyhow!("cannot open a session through logind/seatd: {err}"))?;
     let seat_name = session.seat();
