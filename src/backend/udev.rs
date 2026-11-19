@@ -79,6 +79,9 @@ pub struct UdevBackend {
     libinput: Libinput,
     devices: HashMap<DrmNode, DeviceState>,
     cursor: Cursor,
+    /// Diagnostics: how many frames we actually queued and how many were empty.
+    frames_drawn: u32,
+    frames_empty: u32,
     loop_handle: LoopHandle<'static, Mriya>,
     shm_formats: Vec<smithay::reexports::wayland_server::protocol::wl_shm::Format>,
 }
@@ -147,12 +150,23 @@ impl UdevBackend {
             )
             .map_err(|err| anyhow!("render_frame failed: {err}"))?;
 
-        if !result.is_empty {
-            surface
-                .drm
-                .queue_frame(())
-                .map_err(|err| anyhow!("queue_frame failed: {err}"))?;
+        if result.is_empty {
+            // Nothing damaged: nothing to scan out. Log the first few so a black
+            // screen can be told apart from "we never even started drawing".
+            if self.frames_drawn < 3 && self.frames_empty < 3 {
+                self.frames_empty += 1;
+                tracing::warn!("frame has no damage, skipping it");
+            }
+            return Ok(());
         }
+        self.frames_drawn += 1;
+        if self.frames_drawn <= 3 {
+            tracing::debug!(frames = self.frames_drawn, "output frame queued");
+        }
+        surface
+            .drm
+            .queue_frame(())
+            .map_err(|err| anyhow!("queue_frame failed: {err}"))?;
         Ok(())
     }
 
@@ -458,6 +472,8 @@ pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Resul
         libinput,
         devices: HashMap::new(),
         cursor: Cursor::new(&state.config.cursor),
+        frames_drawn: 0,
+        frames_empty: 0,
         loop_handle: loop_handle.clone(),
         shm_formats: Vec::new(),
     };

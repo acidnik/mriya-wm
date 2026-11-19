@@ -75,6 +75,8 @@ pub struct Mriya {
     pub suppressed_keys: Vec<Keycode>,
     /// Set when the scene changed and a new frame has to be drawn.
     pub needs_redraw: bool,
+    /// A frame is already queued on the event loop (DRM backend).
+    pub frame_scheduled: bool,
     /// Backend that draws the scene; set once the backend is initialized.
     pub renderer: Option<crate::backend::Backend>,
     /// Event loop handle, used by the DRM backend to schedule frames.
@@ -203,6 +205,7 @@ impl Mriya {
             cursor_override: None,
             suppressed_keys: Vec::new(),
             needs_redraw: true,
+            frame_scheduled: false,
             renderer: None,
             loop_handle: None,
             frame_press: None,
@@ -557,20 +560,26 @@ impl Mriya {
     /// Client commits are processed in the Wayland event source, so this is the
     /// only way a `commit` turns into a painted frame.
     pub fn request_redraw(&mut self) {
-        if self.needs_redraw {
-            return;
-        }
         self.needs_redraw = true;
         match &self.renderer {
             Some(crate::backend::Backend::Nested(renderer)) => renderer.request_redraw(),
-            // No window to ask: schedule the frame on the event loop instead.
-            Some(crate::backend::Backend::Udev(_)) => {
-                if let Some(handle) = &self.loop_handle {
-                    handle.insert_idle(|state| state.render_frame());
-                }
-            }
-            None => {}
+            // No window to ask: queue the frame on the event loop. This has to
+            // happen even when `needs_redraw` is already set, otherwise the very
+            // first frame of a DRM session is never drawn (`needs_redraw` starts
+            // as `true`) and the screen just stays black.
+            Some(crate::backend::Backend::Udev(_)) | None => self.schedule_frame(),
         }
+    }
+
+    fn schedule_frame(&mut self) {
+        if self.frame_scheduled {
+            return;
+        }
+        let Some(handle) = &self.loop_handle else {
+            return;
+        };
+        self.frame_scheduled = true;
+        handle.insert_idle(|state| state.render_frame());
     }
 
     /// Run `f` with the DRM backend, temporarily taking it out of the state.
@@ -591,6 +600,7 @@ impl Mriya {
 
     /// Draw one frame. Called by the backend when it wants a new picture.
     pub fn render_frame(&mut self) {
+        self.frame_scheduled = false;
         let Some(mut renderer) = self.renderer.take() else {
             return;
         };
@@ -599,6 +609,10 @@ impl Mriya {
             tracing::warn!(%err, "failed to render a frame");
         }
         self.renderer = Some(renderer);
+        // Something changed while the frame was being drawn.
+        if self.needs_redraw {
+            self.request_redraw();
+        }
     }
 
     /// Handle a change of the output size reported by the backend.
