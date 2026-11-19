@@ -52,6 +52,22 @@ impl Mriya {
         }
     }
 
+    /// Map every output in every workspace; the DRM backend creates outputs
+    /// after the workspaces already exist.
+    pub fn map_outputs_into_workspaces(&mut self) {
+        let outputs: Vec<(smithay::output::Output, Point<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter_map(|output| {
+                let geometry = self.space.output_geometry(output)?;
+                Some((output.clone(), geometry.loc))
+            })
+            .collect();
+        for (output, location) in outputs {
+            self.map_output_everywhere(&output, location);
+        }
+    }
+
     /// Number of workspaces the user has ever reached, at least the default.
     pub fn workspace_count(&self) -> usize {
         self.workspaces.len().max(DEFAULT_WORKSPACES)

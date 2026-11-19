@@ -76,7 +76,9 @@ pub struct Mriya {
     /// Set when the scene changed and a new frame has to be drawn.
     pub needs_redraw: bool,
     /// Backend that draws the scene; set once the backend is initialized.
-    pub renderer: Option<super::backend::nested::NestedRenderer>,
+    pub renderer: Option<crate::backend::Backend>,
+    /// Event loop handle, used by the DRM backend to schedule frames.
+    pub loop_handle: Option<smithay::reexports::calloop::LoopHandle<'static, Mriya>>,
 
     /// Window currently holding a titlebar button down.
     pub frame_press: Option<(Window, FrameButton)>,
@@ -202,6 +204,7 @@ impl Mriya {
             suppressed_keys: Vec::new(),
             needs_redraw: true,
             renderer: None,
+            loop_handle: None,
             frame_press: None,
             last_titlebar_click: None,
             theme,
@@ -554,10 +557,36 @@ impl Mriya {
     /// Client commits are processed in the Wayland event source, so this is the
     /// only way a `commit` turns into a painted frame.
     pub fn request_redraw(&mut self) {
-        self.needs_redraw = true;
-        if let Some(renderer) = &self.renderer {
-            renderer.request_redraw();
+        if self.needs_redraw {
+            return;
         }
+        self.needs_redraw = true;
+        match &self.renderer {
+            Some(crate::backend::Backend::Nested(renderer)) => renderer.request_redraw(),
+            // No window to ask: schedule the frame on the event loop instead.
+            Some(crate::backend::Backend::Udev(_)) => {
+                if let Some(handle) = &self.loop_handle {
+                    handle.insert_idle(|state| state.render_frame());
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Run `f` with the DRM backend, temporarily taking it out of the state.
+    ///
+    /// The backend lives inside `Mriya`, so anything that needs both (vblank,
+    /// device hotplug, session events) goes through this.
+    pub fn with_udev_backend<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::backend::udev::UdevBackend, &mut Mriya) -> R,
+    ) -> Option<R> {
+        let crate::backend::Backend::Udev(mut backend) = self.renderer.take()? else {
+            return None;
+        };
+        let result = f(&mut backend, self);
+        self.renderer = Some(crate::backend::Backend::Udev(backend));
+        Some(result)
     }
 
     /// Draw one frame. Called by the backend when it wants a new picture.

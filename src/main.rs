@@ -71,7 +71,17 @@ fn main() -> Result<()> {
         }
     }
 
-    backend::nested::run(event_loop, state)
+    // A display manager starts us without a Wayland display and with a DRM
+    // device available; in a nested session there is a parent compositor to
+    // draw into. `--drm` forces the first.
+    let use_drm = args.drm
+        || (env::var_os("WAYLAND_DISPLAY").is_none() && std::path::Path::new("/dev/dri").exists());
+    if use_drm {
+        info!("starting the DRM backend");
+        backend::udev::run(event_loop, state)
+    } else {
+        backend::nested::run(event_loop, state)
+    }
 }
 
 fn init_tracing() {
@@ -103,12 +113,15 @@ struct Args {
     command: Vec<String>,
     config: Option<PathBuf>,
     list_themes: bool,
+    /// Run on a TTY through DRM/udev instead of nested in another session.
+    drm: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut command = Vec::new();
     let mut config = None;
     let mut list_themes = false;
+    let mut drm = false;
     let mut args = env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -119,6 +132,7 @@ fn parse_args() -> Result<Args> {
                 None => bail!("--config requires a path"),
             },
             "--list-themes" => list_themes = true,
+            "--drm" => drm = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -131,6 +145,7 @@ fn parse_args() -> Result<Args> {
         command,
         config,
         list_themes,
+        drm,
     })
 }
 
@@ -145,6 +160,8 @@ USAGE:
 
 OPTIONS:
     --config <PATH>                     Config file (default: $XDG_CONFIG_HOME/mriya/config.kdl)
+    --drm                               Run on a TTY through DRM/udev (a display
+                                        manager starts the compositor this way)
     --list-themes                       Print the xfwm4 themes found and exit
     -c, --command <PROGRAM> [ARGS...]   Start a client after the compositor is up
     -h, --help                          Print this help

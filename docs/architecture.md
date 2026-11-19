@@ -17,6 +17,36 @@
 - Рендер: `GlesRenderer` (EGL/GLES2), кадр рисуется по требованию
   (когда сцена изменилась), а не постоянным циклом.
 
+### Итерация 18 — DRM/udev-бэкенд (запуск на TTY)
+
+- `Mriya::renderer` стал enum `Backend { Nested, Udev }`, а сцена собирается один
+  раз в `backend::scene_elements()` — оба бэкенда рисуют один и тот же список
+  (окна с рамками, панели по слоям, курсор).
+- `src/backend/udev.rs`: сессия через `LibSeatSession` (logind/seatd), ввод через
+  `LibinputInputBackend` (тот же `process_input_event`, что и у winit), устройства
+  через `UdevBackend`. На каждый подключённый коннектор создаётся
+  `DrmOutput`/`DrmOutputManager` с preferred-режимом, `Output` с этим режимом и
+  `space.map_output` во всех воркспейсах.
+- Кадр: `scene_elements` → `DrmOutput::render_frame(..., FrameFlags::DEFAULT)` →
+  `queue_frame`; по `DrmEvent::VBlank` — `frame_submitted`, `send_frame` окнам и
+  панелям, потом следующий кадр по `insert_idle`.
+- Переключение VT: `PauseSession` → `libinput.suspend()` + `DrmOutputManager::pause()`,
+  `ActivateSession` → `resume()` + `activate(false)`.
+- Выбор карты: `MRIYA_DRM_DEVICE`, иначе `primary_gpu()` (на гибридных ноутбуках
+  это загрузочная карта, а не дискретная).
+- `--drm` включает бэкенд вручную; без флага он выбирается сам, если нет
+  `WAYLAND_DISPLAY` (так стартует display manager).
+
+Что пока упрощено и требует первого прогона на железе:
+
+- запрашивается только `Xrgb8888` как формат сканирования, 10-битные форматы и
+  dmabuf-feedback не настроены (клиенты рисуют через shm, это работает, но
+  медленнее);
+- курсор рисуется элементом, аппаратный cursor-plane не используется;
+- размещение окон и `usable_area` смотрят на первый вывод, поэтому на
+  двух-мониторной конфигурации второй экран пока только отображается;
+- отключение коннектора на ходу не обрабатывается (только удаление устройства).
+
 ### Итерация 17 — воркспейсы и `ext-workspace-v1`
 
 - Воркспейсы — это несколько независимых стеков окон. Активный лежит в
@@ -568,8 +598,10 @@ management`, `idle_inhibitor` — `zwp_idle_inhibit_manager_v1`. Все три �
 4. Автоперезагрузка конфига (inotify).
 5. `text-input` (IME): нужен ещё `zwp_input_method_v2` и отрисовка всплывающего
    окна IME.
-6. udev/DRM-бэкенд для запуска на TTY (единственное, что мешает самостоятельной
-   сессии). Что для него нужно, по образцу `anvil/src/udev.rs` (там ~1700 строк):
+6. udev/DRM-бэкенд: каркас готов (см. итерацию 18), осталось довести на железе —
+   форматы сканирования, аппаратный курсор, второй монитор, отключение коннектора.
+   Справка по объёму: `anvil/src/udev.rs` ~1700 строк, у нас ~600 без лизинга,
+   syncobj и dmabuf-feedback. Детали, на которые смотреть при отладке:
 
    - фичи smithay: `backend_udev`, `backend_drm`, `backend_gbm`,
      `backend_libinput`, `backend_session_libseat`, `renderer_multi`, плюс

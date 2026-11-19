@@ -9,9 +9,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use smithay::{
     backend::{
-        renderer::{
-            damage::OutputDamageTracker, element::AsRenderElements, gles::GlesRenderer, ImportMemWl,
-        },
+        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportMemWl},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
     input::pointer::CursorImageStatus,
@@ -23,11 +21,11 @@ use smithay::{
             window::Window as WinitWindow,
         },
     },
-    utils::{Physical, Scale, Size, Transform},
+    utils::{Physical, Size, Transform},
 };
 use tracing::info;
 
-use crate::{backend::element::NestedRenderElement, cursor::Cursor, decor, Mriya};
+use crate::{cursor::Cursor, Mriya};
 
 /// Colour of the "desktop" behind all windows.
 const BACKGROUND: [f32; 4] = [0.11, 0.11, 0.13, 1.0];
@@ -91,7 +89,7 @@ pub fn run(mut event_loop: EventLoop<Mriya>, mut state: Mriya) -> Result<()> {
         host_cursor_visible: None,
     };
     info!(theme = renderer.cursor.theme_name(), "cursor theme loaded");
-    state.renderer = Some(renderer);
+    state.renderer = Some(super::Backend::Nested(renderer));
     state.request_redraw();
 
     event_loop
@@ -166,7 +164,6 @@ impl NestedRenderer {
     /// Draw one frame into the nested window.
     pub(crate) fn draw(&mut self, state: &mut Mriya) -> Result<()> {
         let scale = self.output.current_scale().fractional_scale();
-        let cursor_position = state.pointer_location;
         let cursor_status = match state.cursor_override {
             Some(icon) => smithay::input::pointer::CursorImageStatus::Named(icon),
             None => state.cursor_status.clone(),
@@ -179,94 +176,15 @@ impl NestedRenderer {
 
         let damage = {
             let (renderer, mut framebuffer) = self.graphics.bind()?;
-            let output_scale = Scale::from(scale);
 
-            let active_window = state.focused_window();
-            let text = &mut state.text;
-            let icons = &mut state.icons;
-            let mut elements: Vec<NestedRenderElement<GlesRenderer>> =
-                Vec::with_capacity(state.space.elements().len() * 4 + 8);
-
-            // Panels: background and bottom layers go under the windows, top and
-            // overlay above them. Their locations are in output coordinates.
-            let (below_layers, above_layers): (Vec<_>, Vec<_>) =
-                crate::layers::surfaces(&state.space)
-                    .into_iter()
-                    .partition(|(layer, _)| {
-                        !matches!(
-                            layer.layer(),
-                            smithay::wayland::shell::wlr_layer::Layer::Top
-                                | smithay::wayland::shell::wlr_layer::Layer::Overlay
-                        )
-                    });
-
-            for (layer, location) in &below_layers {
-                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
-                    NestedRenderElement<GlesRenderer>,
-                >(
-                    layer,
-                    renderer,
-                    location.to_physical_precise_round(output_scale),
-                    output_scale,
-                    1.0,
-                ));
-            }
-
-            // Collected bottom to top (frame below its client content, windows
-            // in stacking order); the damage tracker wants front to back, so the
-            // list is reversed at the end.
-            for window in state.space.elements_for_output(&self.output) {
-                let Some(content_location) = state.space.element_location(window) else {
-                    continue;
-                };
-
-                let frame = decor::render::elements(
-                    renderer,
-                    state.theme.as_ref(),
-                    text,
-                    icons,
-                    window,
-                    content_location,
-                    window.geometry().size,
-                    active_window.as_ref() == Some(window),
-                    output_scale,
-                );
-                // Below the client surface: shadow (and the flat fallback's
-                // background).
-                elements.extend(frame.below);
-                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
-                    NestedRenderElement<GlesRenderer>,
-                >(
-                    window,
-                    renderer,
-                    content_location.to_physical_precise_round(output_scale),
-                    output_scale,
-                    1.0,
-                ));
-                // Above it: titlebar, buttons, borders and corners. A client
-                // surface can be bigger than its reported geometry, so drawing
-                // the frame first let it paint over the titlebar.
-                elements.extend(frame.above);
-            }
-
-            for (layer, location) in &above_layers {
-                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
-                    NestedRenderElement<GlesRenderer>,
-                >(
-                    layer,
-                    renderer,
-                    location.to_physical_precise_round(output_scale),
-                    output_scale,
-                    1.0,
-                ));
-            }
-
-            elements.extend(self.cursor.render_elements(
+            let mut elements = crate::backend::scene_elements(
                 renderer,
-                cursor_position,
+                state,
+                &self.output,
                 scale,
+                &mut self.cursor,
                 &cursor_status,
-            ));
+            );
 
             // OutputDamageTracker draws the list back to front: the last
             // element of the slice ends up at the very bottom.

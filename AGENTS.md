@@ -23,6 +23,24 @@ cargo fmt
 Документация — `docs/architecture.md` (по-русски, по итерациям); пример конфига
 — `docs/example-config.kdl`; конфиг панели — `examples/waybar/`.
 
+## DRM-бэкенд: как проверять
+
+Запуск на TTY (display manager стартует так же):
+
+```sh
+Ctrl+Alt+F2                                  # уйти с графической сессии
+RUST_LOG=info,mriya_wm=debug mriya-wm --drm   # или ./target/release/mriya-wm --drm
+Ctrl+Alt+F1                                  # вернуться
+```
+
+`Ctrl+Alt+F1` возвращает в сессию даже если композитор упал, поэтому проверять
+только так, а не через greeter. Что смотреть в логе: `using this GPU as primary`,
+`output configured` (коннектор и режим), затем отсутствие `failed to render an
+output`. Ошибки `cannot open …` / `cannot become drm master` обычно означают, что
+карта занята другой сессией (то есть запущено не с TTY) или нет прав logind.
+
+Отладка на конкретной карте: `MRIYA_DRM_DEVICE=/dev/dri/card1`.
+
 ## Осторожно с чужими процессами
 
 Никогда не убивать процессы пользователя по имени (`pkill -x waybar`,
