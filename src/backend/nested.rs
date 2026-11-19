@@ -61,11 +61,15 @@ pub fn run(mut event_loop: EventLoop<Mriya>, mut state: Mriya) -> Result<()> {
         },
     );
     output.create_global::<Mriya>(&state.display_handle);
+    let mode = Mode {
+        size: graphics.window_size(),
+        refresh: REFRESH_MHZ,
+    };
+    // Clients (and smithay's layer arrangement) read the preferred mode; without
+    // one every `wl_output` bind logs a warning.
+    output.set_preferred(mode);
     output.change_current_state(
-        Some(Mode {
-            size: graphics.window_size(),
-            refresh: REFRESH_MHZ,
-        }),
+        Some(mode),
         Some(Transform::Flipped180),
         None,
         Some((0, 0).into()),
@@ -147,15 +151,13 @@ impl NestedRenderer {
     }
 
     pub(crate) fn resize(&mut self, size: Size<i32, Physical>) {
-        self.output.change_current_state(
-            Some(Mode {
-                size,
-                refresh: REFRESH_MHZ,
-            }),
-            None,
-            None,
-            None,
-        );
+        let mode = Mode {
+            size,
+            refresh: REFRESH_MHZ,
+        };
+        self.output.set_preferred(mode);
+        self.output
+            .change_current_state(Some(mode), None, None, None);
         // Buffer contents are undefined after a resize.
         self.full_redraw = FULL_REDRAW_FRAMES;
     }
@@ -182,7 +184,32 @@ impl NestedRenderer {
             let text = &mut state.text;
             let icons = &mut state.icons;
             let mut elements: Vec<NestedRenderElement<GlesRenderer>> =
-                Vec::with_capacity(state.space.elements().len() * 4 + 1);
+                Vec::with_capacity(state.space.elements().len() * 4 + 8);
+
+            // Panels: background and bottom layers go under the windows, top and
+            // overlay above them. Their locations are in output coordinates.
+            let (below_layers, above_layers): (Vec<_>, Vec<_>) =
+                crate::layers::surfaces(&state.space)
+                    .into_iter()
+                    .partition(|(layer, _)| {
+                        !matches!(
+                            layer.layer(),
+                            smithay::wayland::shell::wlr_layer::Layer::Top
+                                | smithay::wayland::shell::wlr_layer::Layer::Overlay
+                        )
+                    });
+
+            for (layer, location) in &below_layers {
+                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
+                    NestedRenderElement<GlesRenderer>,
+                >(
+                    layer,
+                    renderer,
+                    location.to_physical_precise_round(output_scale),
+                    output_scale,
+                    1.0,
+                ));
+            }
 
             // Collected bottom to top (frame below its client content, windows
             // in stacking order); the damage tracker wants front to back, so the
@@ -219,6 +246,18 @@ impl NestedRenderer {
                 // surface can be bigger than its reported geometry, so drawing
                 // the frame first let it paint over the titlebar.
                 elements.extend(frame.above);
+            }
+
+            for (layer, location) in &above_layers {
+                elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
+                    NestedRenderElement<GlesRenderer>,
+                >(
+                    layer,
+                    renderer,
+                    location.to_physical_precise_round(output_scale),
+                    output_scale,
+                    1.0,
+                ));
             }
 
             elements.extend(self.cursor.render_elements(

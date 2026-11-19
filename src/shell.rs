@@ -34,12 +34,13 @@ pub fn location_for_new_window(space: &Space<Window>) -> Point<i32, Logical> {
         return (0, 0).into();
     };
 
+    // Panels reserve their band; windows belong inside what is left.
+    let area = crate::layers::usable_area(space).unwrap_or(output_geo);
+
     let step = (space.elements().count() as i32 % CASCADE_WRAP) * CASCADE_STEP;
     // A third of the way in looks better than dead centre for the first window.
-    let base = Point::<i32, Logical>::from((
-        output_geo.loc.x + output_geo.size.w / 6,
-        output_geo.loc.y + output_geo.size.h / 6,
-    ));
+    let base =
+        Point::<i32, Logical>::from((area.loc.x + area.size.w / 6, area.loc.y + area.size.h / 6));
 
     base + Point::from((step, step))
 }
@@ -119,7 +120,8 @@ pub fn set_maximized(theme: Option<&Theme>, space: &mut Space<Window>, window: &
         return;
     }
 
-    let Some(output_geo) = output_geometry(space) else {
+    let Some(output_geo) = crate::layers::usable_area(space).or_else(|| output_geometry(space))
+    else {
         toplevel.send_configure();
         return;
     };

@@ -98,7 +98,19 @@ impl Mriya {
                         return;
                     }
 
-                    if let Some((window, _)) = self.window_under(location) {
+                    // A click on a panel goes to the panel, not to the window
+                    // underneath it.
+                    if let Some(layer) = self.layer_under(location) {
+                        if layer.can_receive_keyboard_focus() {
+                            let surface = layer.wl_surface().clone();
+                            self.seat.get_keyboard().unwrap().set_focus(
+                                self,
+                                Some(surface),
+                                serial,
+                            );
+                        }
+                        self.request_redraw();
+                    } else if let Some((window, _)) = self.window_under(location) {
                         self.focus_window(&window);
                     } else {
                         self.clear_focus(serial);
@@ -388,6 +400,16 @@ impl Mriya {
 
     /// Track which titlebar button the pointer is over, for hover states.
     fn update_frame_hover(&mut self) {
+        // A panel above the window owns the pointer there: no frame edges, no
+        // resize cursor.
+        if self.layer_under(self.pointer_location).is_some() {
+            if self.cursor_override.is_some() {
+                self.cursor_override = None;
+                self.request_redraw();
+            }
+            return;
+        }
+
         let hit = decor::hit_test(
             self.theme.as_ref(),
             &mut self.text,

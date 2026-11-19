@@ -224,7 +224,7 @@ impl XdgShellHandler for Mriya {
 delegate_xdg_shell!(Mriya);
 
 impl Mriya {
-    fn unconstrain_popup(&self, popup: &PopupSurface) {
+    pub fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;
         };

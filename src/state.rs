@@ -24,7 +24,10 @@ use smithay::{
         fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
-        shell::xdg::{decoration::XdgDecorationState, ToplevelSurface, XdgShellState},
+        shell::{
+            wlr_layer::WlrLayerShellState,
+            xdg::{decoration::XdgDecorationState, ToplevelSurface, XdgShellState},
+        },
         shm::ShmState,
         socket::ListeningSocketSource,
         viewporter::ViewporterState,
@@ -106,6 +109,7 @@ pub struct Mriya {
     /// Kept alive so the `zxdg_output_manager_v1` global stays advertised.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
+    pub layer_shell_state: WlrLayerShellState,
     pub seat_state: SeatState<Mriya>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -130,6 +134,7 @@ impl Mriya {
         let compositor_state = CompositorState::new::<Self>(&display_handle);
         let xdg_shell_state = XdgShellState::new::<Self>(&display_handle);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&display_handle);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
         let shm_state = ShmState::new::<Self>(&display_handle, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
@@ -204,6 +209,7 @@ impl Mriya {
             xdg_decoration_state,
             shm_state,
             output_manager_state,
+            layer_shell_state,
             seat_state,
             data_device_state,
             primary_selection_state,
@@ -555,6 +561,8 @@ impl Mriya {
         if let Some(renderer) = &mut self.renderer {
             renderer.resize(size);
         }
+        // Panels are anchored to the output, so they have to be laid out again.
+        crate::layers::arrange(&self.space);
         self.request_redraw();
     }
 
@@ -563,11 +571,51 @@ impl Mriya {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.window_under(pos).and_then(|(window, location)| {
-            window
-                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                .map(|(surface, point)| (surface, (point + location).to_f64()))
-        })
+        // Panels first: the bar sits above the windows and swallows clicks
+        // there, while a wallpaper layer sits below them.
+        if let Some((surface, _)) = crate::layers::surface_under(
+            &self.space,
+            pos,
+            &[
+                smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                smithay::wayland::shell::wlr_layer::Layer::Top,
+            ],
+        ) {
+            return Some((surface.clone(), pos));
+        }
+
+        if let Some((window, location)) = self.window_under(pos) {
+            if let Some((surface, point)) =
+                window.surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+            {
+                return Some((surface, (point + location).to_f64()));
+            }
+        }
+
+        crate::layers::surface_under(
+            &self.space,
+            pos,
+            &[
+                smithay::wayland::shell::wlr_layer::Layer::Bottom,
+                smithay::wayland::shell::wlr_layer::Layer::Background,
+            ],
+        )
+        .map(|(surface, _)| (surface, pos))
+    }
+
+    /// Layer surface that owns the pointer position, if any.
+    pub fn layer_under(&self, pos: Point<f64, Logical>) -> Option<smithay::desktop::LayerSurface> {
+        crate::layers::surface_under(
+            &self.space,
+            pos,
+            &[
+                smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                smithay::wayland::shell::wlr_layer::Layer::Top,
+                smithay::wayland::shell::wlr_layer::Layer::Bottom,
+                smithay::wayland::shell::wlr_layer::Layer::Background,
+            ],
+        )
+        .map(|(_, layer)| layer)
     }
 
     /// Window below the given position, together with its location.

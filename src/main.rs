@@ -13,6 +13,7 @@ mod grabs;
 mod handlers;
 mod input;
 mod keybindings;
+mod layers;
 mod shell;
 mod spawn;
 mod state;

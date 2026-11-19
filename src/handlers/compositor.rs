@@ -46,11 +46,21 @@ impl CompositorHandler for Mriya {
                         .unwrap_or(false)
                 })
                 .cloned();
-            if let Some(window) = window {
-                window.on_commit();
-                // The client's window geometry is what tells whether it draws
-                // its own decorations, and it is only known after a commit.
-                self.update_decoration_mode(&window);
+            match window {
+                Some(window) => {
+                    window.on_commit();
+                    // The client's window geometry is what tells whether it
+                    // draws its own decorations, and it is only known after a
+                    // commit.
+                    self.update_decoration_mode(&window);
+                }
+                None => {
+                    // Panels are not in the space; their size and scale come from
+                    // the layer map on every commit of the root surface.
+                    if crate::layers::is_layer_surface(&self.space, &root) {
+                        self.configure_layer_surface(&root);
+                    }
+                }
             }
         }
 
