@@ -189,7 +189,7 @@ impl NestedRenderer {
                     continue;
                 };
 
-                elements.extend(decor::render::elements(
+                let frame = decor::render::elements(
                     renderer,
                     state.theme.as_ref(),
                     text,
@@ -199,7 +199,10 @@ impl NestedRenderer {
                     window.geometry().size,
                     active_window.as_ref() == Some(window),
                     output_scale,
-                ));
+                );
+                // Below the client surface: shadow (and the flat fallback's
+                // background).
+                elements.extend(frame.below);
                 elements.extend(AsRenderElements::<GlesRenderer>::render_elements::<
                     NestedRenderElement<GlesRenderer>,
                 >(
@@ -209,6 +212,10 @@ impl NestedRenderer {
                     output_scale,
                     1.0,
                 ));
+                // Above it: titlebar, buttons, borders and corners. A client
+                // surface can be bigger than its reported geometry, so drawing
+                // the frame first let it paint over the titlebar.
+                elements.extend(frame.above);
             }
 
             elements.extend(self.cursor.render_elements(

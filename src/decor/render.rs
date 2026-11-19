@@ -104,10 +104,18 @@ impl FlatBuffers {
     }
 }
 
-/// Frame elements for a window whose content area is at `content_location`.
+/// Frame parts split by their z-order relative to the client surface.
 ///
-/// The elements are emitted before the client's own elements, so the frame is
-/// drawn below its client surface but above windows further down the stack.
+/// `below` has to be drawn before the client content (shadow, and the flat
+/// fallback's background), `above` after it: a client surface can be larger than
+/// the window geometry it reports (its own header, shadow or border), and drawing
+/// the frame first lets that surface paint over the titlebar.
+#[derive(Default)]
+pub struct FrameElements {
+    pub below: Vec<NestedRenderElement<GlesRenderer>>,
+    pub above: Vec<NestedRenderElement<GlesRenderer>>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn elements(
     renderer: &mut GlesRenderer,
@@ -119,19 +127,19 @@ pub fn elements(
     content_size: Size<i32, Logical>,
     active: bool,
     scale: Scale<f64>,
-) -> Vec<NestedRenderElement<GlesRenderer>> {
+) -> FrameElements {
     if state(window).active != active {
         state_mut(window).active = active;
     }
 
     let frame_state = state(window);
     if !frame_state.decorated() {
-        return Vec::new();
+        return FrameElements::default();
     }
 
     let geometry = FrameGeometry::of(theme, &frame_state);
     if geometry.is_empty() {
-        return Vec::new();
+        return FrameElements::default();
     }
 
     match theme {
@@ -170,7 +178,7 @@ fn themed_elements(
     frame_state: &FrameState,
     geometry: FrameGeometry,
     scale: Scale<f64>,
-) -> Vec<NestedRenderElement<GlesRenderer>> {
+) -> FrameElements {
     let cache = frame::textures(
         window,
         theme,
@@ -183,9 +191,12 @@ fn themed_elements(
     let textures = &cache.textures;
 
     let outer = geometry.outer_rect(Rectangle::new(content_location, content_size));
-    let mut elements = Vec::with_capacity(6 + textures.corners.len());
+    let mut result = FrameElements {
+        below: Vec::new(),
+        above: Vec::with_capacity(6 + textures.corners.len()),
+    };
 
-    // Shadow first: it goes under the frame.
+    // Shadow first: it goes under the window.
     if let Some(shadow) = &textures.shadow {
         let location = Point::<i32, Logical>::from((
             outer.loc.x + shadow.offset.0,
@@ -209,7 +220,7 @@ fn themed_elements(
             Some(Size::from(shadow.draw_size)),
             Kind::Unspecified,
         ) {
-            elements.push(NestedRenderElement::Memory(element));
+            result.below.push(NestedRenderElement::Memory(element));
         }
     }
 
@@ -228,21 +239,10 @@ fn themed_elements(
             None,
             Kind::Unspecified,
         ) {
-            elements.push(NestedRenderElement::Memory(element));
+            result.above.push(NestedRenderElement::Memory(element));
         }
     };
 
-    if std::env::var("MRIYA_TRACE_ELEMENTS").is_ok() {
-        tracing::debug!(
-            app_id = %state(window).app_id,
-            active = frame_state.active,
-            ?outer,
-            titlebar = ?(textures.titlebar_mask.width, textures.titlebar_mask.height),
-            corners = textures.corners.len(),
-            shadow = textures.shadow.is_some(),
-            "frame elements"
-        );
-    }
     push(&textures.titlebar, outer.loc);
     for (x, y, buffer) in &textures.overlays {
         push(buffer, Point::from((outer.loc.x + x, outer.loc.y + y)));
@@ -273,7 +273,7 @@ fn themed_elements(
         );
     }
 
-    elements
+    result
 }
 
 fn flat_elements(
@@ -283,7 +283,7 @@ fn flat_elements(
     frame_state: &FrameState,
     geometry: FrameGeometry,
     scale: Scale<f64>,
-) -> Vec<NestedRenderElement<GlesRenderer>> {
+) -> FrameElements {
     let outer = geometry.outer_rect(Rectangle::new(content_location, content_size));
     let buttons = button_rects(outer, geometry.top);
 
@@ -297,9 +297,12 @@ fn flat_elements(
         .borrow_mut();
     buffers.update(geometry, outer, buttons, frame_state);
 
-    let mut elements = Vec::with_capacity(4);
-    let mut push = |buffer: &SolidColorBuffer, location: Point<i32, Logical>| {
-        elements.push(NestedRenderElement::Solid(
+    let mut result = FrameElements {
+        below: Vec::with_capacity(1),
+        above: Vec::with_capacity(3),
+    };
+    let mut push_below = |buffer: &SolidColorBuffer, location: Point<i32, Logical>| {
+        result.below.push(NestedRenderElement::Solid(
             SolidColorRenderElement::from_buffer(
                 buffer,
                 location.to_physical_precise_round(scale),
@@ -310,16 +313,28 @@ fn flat_elements(
         ));
     };
 
-    push(&buffers.background, outer.loc);
-    push(&buffers.titlebar, outer.loc);
+    push_below(&buffers.background, outer.loc);
+
+    let mut push_above = |buffer: &SolidColorBuffer, location: Point<i32, Logical>| {
+        result.above.push(NestedRenderElement::Solid(
+            SolidColorRenderElement::from_buffer(
+                buffer,
+                location.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            ),
+        ));
+    };
+    push_above(&buffers.titlebar, outer.loc);
 
     for (button, rect) in buttons {
         let location = Point::from((rect.loc.x, rect.loc.y + 1));
         match button {
-            FrameButton::Maximize | FrameButton::Hide => push(&buffers.maximize, location),
-            FrameButton::Close => push(&buffers.close, location),
+            FrameButton::Maximize | FrameButton::Hide => push_above(&buffers.maximize, location),
+            FrameButton::Close => push_above(&buffers.close, location),
         }
     }
 
-    elements
+    result
 }
