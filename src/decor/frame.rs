@@ -9,7 +9,7 @@
 //! areas) click-through.
 
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use super::{
     canvas::{AlphaMask, Canvas},
@@ -31,8 +31,12 @@ pub struct CornerTexture {
 /// Everything needed to draw and hit-test one window frame.
 #[derive(Debug)]
 pub struct FrameTextures {
-    /// Titlebar strip including buttons, in frame coordinates.
+    /// Titlebar strip (background tiling only), in frame coordinates.
     pub titlebar: MemoryRenderBuffer,
+    /// Text, icon and buttons drawn on top of the titlebar, as separate
+    /// elements: keeping them out of the tiled texture makes every part
+    /// independently visible and damage-tracked.
+    pub overlays: Vec<(i32, i32, MemoryRenderBuffer)>,
     pub left: MemoryRenderBuffer,
     pub right: MemoryRenderBuffer,
     pub bottom: MemoryRenderBuffer,
@@ -372,7 +376,6 @@ pub fn build(
     let mut titlebar_canvas = Canvas::new(width, geometry.top);
     compose_titlebar(
         theme,
-        text,
         state,
         &mut titlebar_canvas,
         strip_x,
@@ -381,19 +384,43 @@ pub fn build(
         (width - buttons.right_start + strip_x).max(0),
     );
 
+    // Text, icon and buttons go on top as separate textures.
+    let mut overlays: Vec<(i32, i32, MemoryRenderBuffer)> = Vec::new();
+
+    if let Some((x, y, text_canvas)) = compose_title_text(
+        theme,
+        text,
+        state,
+        strip_x,
+        strip_w,
+        (buttons.left_end - strip_x).max(0),
+        title_cap_width(theme, active),
+        title_cap_width(theme, active),
+        (width - buttons.right_start + strip_x).max(0),
+        geometry.top,
+    ) {
+        if text_canvas.has_content() {
+            overlays.push((x, y, text_canvas.to_buffer()));
+        }
+    }
+
     if theme.params.show_app_icon && theme.params.button_layout.contains('O') {
         if let Some(icon) = icons.get(&state.app_id) {
-            let height = (geometry.top - 6).max(8);
-            let side = height.min(geometry.top - 2);
+            let icon_height = (geometry.top - 6).max(8);
+            let side = icon_height.min(geometry.top - 2);
             let x = geometry.left + theme.params.button_offset + 2;
             let y = ((geometry.top - side) / 2).max(0);
-            titlebar_canvas.blit_scaled(&icon, x, y, side, side);
+            let mut icon_canvas = Canvas::new(side, side);
+            icon_canvas.blit_scaled(&icon, 0, 0, side, side);
+            overlays.push((x, y, icon_canvas.to_buffer()));
         }
     }
 
     for (button, rect) in &buttons.buttons {
         if let Some(image) = button_image(theme, state, *button) {
-            titlebar_canvas.blit(image, rect.loc.x, rect.loc.y);
+            let mut button_canvas = Canvas::new(image.width, image.height);
+            button_canvas.blit(image, 0, 0);
+            overlays.push((rect.loc.x, rect.loc.y, button_canvas.to_buffer()));
         }
     }
 
@@ -428,18 +455,31 @@ pub fn build(
         });
     }
 
-    trace!(app_id = %state.app_id, title = %state.title, "frame text and icon");
+    trace!(
+        app_id = %state.app_id,
+        title = %state.title,
+        active,
+        mode = ?state.mode,
+        client_decorations = state.client_decorations,
+        requested = ?state.requested_mode,
+        "frame text and icon"
+    );
     let placed: Vec<char> = buttons
         .buttons
         .iter()
         .map(|(button, _)| button.letter())
         .collect();
-    trace!(
+    debug!(
         theme = %theme.name,
+        app_id = %state.app_id,
+        active,
         width,
         height,
         titlebar = geometry.top,
         strip = strip_w,
+        left_end = buttons.left_end,
+        right_start = buttons.right_start,
+        alignment = ?theme.params.title_alignment,
         ?placed,
         "frame composed"
     );
@@ -458,6 +498,7 @@ pub fn build(
     FrameTextures {
         shadow,
         titlebar: titlebar_canvas.to_buffer(),
+        overlays,
         left: left.to_buffer(),
         right: right.to_buffer(),
         bottom: bottom.to_buffer(),
@@ -472,7 +513,6 @@ pub fn build(
 #[allow(clippy::too_many_arguments)]
 fn compose_titlebar(
     theme: &Theme,
-    text: &mut TextRenderer,
     state: &FrameState,
     canvas: &mut Canvas,
     strip_x: i32,
@@ -532,29 +572,23 @@ fn compose_titlebar(
             }
         }
     }
-
-    draw_title_text(
-        theme,
-        text,
-        state,
-        canvas,
-        strip_x,
-        strip_width,
-        w1,
-        w2,
-        w4,
-        w5,
-        height,
-    );
 }
 
-/// Title text area: between the title caps, clipped to the titlebar.
+/// Width of the `title-2`/`title-4` caps the text sits between.
+fn title_cap_width(theme: &Theme, active: bool) -> i32 {
+    theme
+        .state_part("title-2", active)
+        .map(|image| image.width)
+        .unwrap_or(0)
+}
+
+/// Title text rasterised into a canvas that is exactly as large as the text, so
+/// it can be placed at the computed position in the titlebar.
 #[allow(clippy::too_many_arguments)]
-fn draw_title_text(
+fn compose_title_text(
     theme: &Theme,
     text: &mut TextRenderer,
     state: &FrameState,
-    canvas: &mut Canvas,
     strip_x: i32,
     strip_width: i32,
     w1: i32,
@@ -562,9 +596,9 @@ fn draw_title_text(
     w4: i32,
     w5: i32,
     height: i32,
-) {
+) -> Option<(i32, i32, Canvas)> {
     if state.title.is_empty() {
-        return;
+        return None;
     }
 
     let params = &theme.params;
@@ -572,13 +606,8 @@ fn draw_title_text(
     let x0 = (strip_x + w1 + w2).max(strip_x);
     let x1 = (strip_x + strip_width - w5 - w4).min(strip_x + strip_width);
     if x1 <= x0 {
-        return;
+        return None;
     }
-
-    let area = smithay::utils::Rectangle::new(
-        smithay::utils::Point::from((x0, 0)),
-        smithay::utils::Size::from((x1 - x0, height)),
-    );
     let vertical_offset = if active {
         params.title_vertical_offset_active
     } else {
@@ -592,17 +621,30 @@ fn draw_title_text(
     };
     let shadow_color = theme_text_shadow_color(params, active);
 
+    let size = text.measure(&params.title_font, &state.title);
+    let text_width = (size.ceil() as i32).max(1);
+    let mut canvas = Canvas::new(text_width, height);
+
+    let start_x = match params.title_alignment {
+        super::theme::Alignment::Left => x0,
+        super::theme::Alignment::Center => x0 + (x1 - x0 - text_width) / 2,
+        super::theme::Alignment::Right => x1 - text_width,
+    }
+    .clamp(x0, x1.saturating_sub(text_width).max(x0));
+
     text.draw(
-        canvas,
+        &mut canvas,
         &params.title_font,
         &state.title,
-        area,
+        smithay::utils::Rectangle::new((0, 0).into(), (text_width, height).into()),
         vertical_offset,
-        params.title_alignment,
+        super::theme::Alignment::Left,
         color,
         shadow,
         shadow_color,
     );
+
+    Some((start_x, 0, canvas))
 }
 
 fn theme_text_color(params: &super::theme::ThemeParams, active: bool) -> Rgba {

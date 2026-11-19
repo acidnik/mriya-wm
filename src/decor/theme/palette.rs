@@ -39,7 +39,7 @@ pub const SYMBOLS: [&str; 24] = [
 /// grey window background and white text on the active titlebar.
 const PRESET: [&str; 24] = [
     "#ffffff", // active_text_color
-    "#a8a8a8", // inactive_text_color
+    "#4a4a4a", // inactive_text_color
     "#000000", // active_text_shadow_color
     "#000000", // inactive_text_shadow_color
     "#2f2f2f", // active_border_color
@@ -57,7 +57,7 @@ const PRESET: [&str; 24] = [
     "#e8e8e8", // inactive_hilight_1
     "#a9a9a9", // inactive_shadow_1
     "#c4c4c4", // inactive_mid_1
-    "#8a8a8a", // inactive_text_color_2
+    "#4a4a4a", // inactive_text_color_2
     "#d6d6d6", // inactive_color_2
     "#e8e8e8", // inactive_hilight_2
     "#a9a9a9", // inactive_shadow_2

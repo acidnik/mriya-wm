@@ -199,6 +199,11 @@ impl Canvas {
         )
     }
 
+    /// Whether anything was painted at all.
+    pub(crate) fn has_content(&self) -> bool {
+        self.pixels.chunks_exact(4).any(|pixel| pixel[3] > 8)
+    }
+
     pub(crate) fn mask(&self) -> AlphaMask {
         let area = (self.width * self.height).max(0) as usize;
         let mut bits = vec![0u64; area.div_ceil(64)];

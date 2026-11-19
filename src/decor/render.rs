@@ -232,7 +232,21 @@ fn themed_elements(
         }
     };
 
+    if std::env::var("MRIYA_TRACE_ELEMENTS").is_ok() {
+        tracing::debug!(
+            app_id = %state(window).app_id,
+            active = frame_state.active,
+            ?outer,
+            titlebar = ?(textures.titlebar_mask.width, textures.titlebar_mask.height),
+            corners = textures.corners.len(),
+            shadow = textures.shadow.is_some(),
+            "frame elements"
+        );
+    }
     push(&textures.titlebar, outer.loc);
+    for (x, y, buffer) in &textures.overlays {
+        push(buffer, Point::from((outer.loc.x + x, outer.loc.y + y)));
+    }
 
     let side_height = (outer.size.h - geometry.top - geometry.bottom).max(0);
     let _ = side_height;

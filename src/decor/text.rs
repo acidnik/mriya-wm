@@ -14,6 +14,10 @@ use super::{
     theme::{palette::Rgba, Alignment, TitleShadow},
 };
 
+/// Width given to the layout; wide enough for any title, small enough to be
+/// finite for cosmic-text's line breaking.
+const TEXT_LAYOUT_WIDTH: f32 = 4096.0;
+
 /// DPI used to convert the point size from the config to pixels.
 const POINTS_TO_PIXELS: f32 = 96.0 / 72.0;
 
@@ -97,10 +101,7 @@ impl TextRenderer {
     #[allow(dead_code)] // used by tests and handy when tuning the titlebar
     pub fn measure(&mut self, font: &TitleFont, text: &str) -> f32 {
         let buffer = self.layout(font, text);
-        buffer
-            .layout_runs()
-            .map(|run| run.line_w)
-            .fold(0.0_f32, f32::max)
+        line_width(&buffer)
     }
 
     /// Draw `text` centred vertically in `area`, aligned horizontally, clipped to
@@ -123,22 +124,32 @@ impl TextRenderer {
         }
 
         let buffer = self.layout(font, text);
-        let mut line_width = 0.0_f32;
+        let width_of_text = line_width(&buffer);
         let mut line_height = font.size;
         for run in buffer.layout_runs() {
-            line_width = line_width.max(run.line_w);
             line_height = line_height.max(run.line_height);
         }
 
         let start_x = match alignment {
             Alignment::Left => area.loc.x as f32,
-            Alignment::Center => area.loc.x as f32 + (area.size.w as f32 - line_width) / 2.0,
-            Alignment::Right => area.loc.x as f32 + area.size.w as f32 - line_width,
+            Alignment::Center => area.loc.x as f32 + (area.size.w as f32 - width_of_text) / 2.0,
+            Alignment::Right => area.loc.x as f32 + area.size.w as f32 - width_of_text,
         }
         .max(area.loc.x as f32);
         let start_y =
             area.loc.y as f32 + vertical_offset as f32 + (area.size.h as f32 - line_height) / 2.0;
         let start_y = start_y.max(area.loc.y as f32);
+
+        tracing::debug!(
+            text,
+            ?area,
+            width_of_text,
+            start_x,
+            start_y,
+            alignment = ?alignment,
+            color = ?color,
+            "drawing title text"
+        );
 
         let shadow_offsets: &[(i32, i32)] = match shadow {
             TitleShadow::None => &[],
@@ -199,8 +210,14 @@ impl TextRenderer {
     fn layout(&mut self, font: &TitleFont, text: &str) -> Buffer {
         let metrics = Metrics::new(font.size, font.size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        // No wrapping: the titlebar clips instead.
-        buffer.set_size(&mut self.font_system, Some(f32::MAX), Some(f32::MAX));
+        // No wrapping: the titlebar clips instead. The width has to be a finite
+        // value, `f32::MAX` makes cosmic-text compute a nonsense line width (and
+        // the text then clamps to the left edge of its area).
+        buffer.set_size(
+            &mut self.font_system,
+            Some(TEXT_LAYOUT_WIDTH),
+            Some(f32::MAX),
+        );
 
         let mut attrs = Attrs::new();
         if let Some(family) = font.family.as_deref() {
@@ -217,6 +234,20 @@ impl TextRenderer {
         buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
     }
+}
+
+/// Width of the laid out text: `LayoutRun::line_w` reports the buffer width for
+/// unwrapped text in this version, so the glyph extents are used instead.
+fn line_width(buffer: &Buffer) -> f32 {
+    buffer
+        .layout_runs()
+        .map(|run| {
+            run.glyphs
+                .iter()
+                .map(|glyph| glyph.x + glyph.w)
+                .fold(0.0_f32, f32::max)
+        })
+        .fold(0.0_f32, f32::max)
 }
 
 #[cfg(test)]
