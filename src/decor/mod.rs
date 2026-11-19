@@ -426,6 +426,29 @@ pub fn button_rects(
 }
 
 /// Topmost window frame under `position`, in space coordinates.
+/// Area of a window that takes pointer input.
+///
+/// That is the frame when we draw one; for a window that draws its own
+/// decorations it is the rectangle the client actually paints. Its surface is
+/// larger than that - the shadow and the client's own resize border live in the
+/// margin - and treating the whole surface as the window kept the pointer
+/// "inside" while it was already past the visible edge: the resize cursor
+/// showed up a centimetre outside the frame.
+pub fn interactive_rect(
+    theme: Option<&Theme>,
+    window: &Window,
+    location: Point<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let geometry = window.geometry();
+    let content = Rectangle::new(location, geometry.size);
+    let frame = FrameGeometry::of(theme, &state(window));
+    if frame.is_empty() {
+        Rectangle::new(location + geometry.loc, geometry.size)
+    } else {
+        frame.outer_rect(content)
+    }
+}
+
 pub fn hit_test(
     theme: Option<&Theme>,
     text: &mut text::TextRenderer,
@@ -439,12 +462,22 @@ pub fn hit_test(
         };
         let frame = state(window);
         if !frame.decorated() {
-            // No frame: only the content area counts, and the regular path
-            // handles it.
-            if content.to_f64().contains(position) {
+            // No frame: only what the client actually paints counts. Its own
+            // resize handles live in the shadow margin, which belongs to no
+            // window any more, so the border of the visible rectangle is
+            // grabbable here instead - with the same look and feel as the frame
+            // of a server-decorated window.
+            let visible =
+                Rectangle::new(content.loc + window.geometry().loc, window.geometry().size);
+            if !frame.fullscreen && !frame.maximized && visible.to_f64().contains(position) {
+                let edge = client_edge_at(&visible, position);
                 return Some(FrameHit {
                     window: window.clone(),
-                    part: FramePart::Content,
+                    part: if edge.is_empty() {
+                        FramePart::Content
+                    } else {
+                        FramePart::Edge(edge)
+                    },
                     content_location: content.loc,
                     content_size: content.size,
                 });
@@ -508,6 +541,41 @@ pub fn hit_test(
         });
     }
     None
+}
+
+/// Width of the resize zone inside the visible edge of a window that draws its
+/// own decorations.
+const CLIENT_EDGE_GRAB: i32 = 5;
+
+/// Resize edge of a client-decorated window: the band just inside its visible
+/// border.
+fn client_edge_at(visible: &Rectangle<i32, Logical>, position: Point<f64, Logical>) -> ResizeEdge {
+    if !visible.to_f64().contains(position) {
+        // Outside is not our business: a client-decorated window ends at its
+        // visible rectangle, its margin belongs to whatever is below it.
+        return ResizeEdge::empty();
+    }
+
+    let band = f64::from(CLIENT_EDGE_GRAB);
+    let left = f64::from(visible.loc.x);
+    let top = f64::from(visible.loc.y);
+    let right = f64::from(visible.loc.x + visible.size.w);
+    let bottom = f64::from(visible.loc.y + visible.size.h);
+
+    let mut edge = ResizeEdge::empty();
+    if position.x - left < band {
+        edge |= ResizeEdge::LEFT;
+    }
+    if right - position.x <= band {
+        edge |= ResizeEdge::RIGHT;
+    }
+    if position.y - top < band {
+        edge |= ResizeEdge::TOP;
+    }
+    if bottom - position.y <= band {
+        edge |= ResizeEdge::BOTTOM;
+    }
+    edge
 }
 
 fn edge_at(
@@ -596,6 +664,39 @@ mod tests {
     fn full_surface_geometry_means_no_client_decorations() {
         let surface = Rectangle::new(Point::from((0, 0)), Size::from((696, 496)));
         assert!(!geometry_looks_inset(surface, surface));
+    }
+
+    #[test]
+    fn client_edge_band_is_inside_the_visible_rect() {
+        // ghostty: the surface is 828x629 with the window at (14, 12) 800x600.
+        let visible = Rectangle::from_size(Size::from((800, 600)));
+
+        // Outside: nothing to grab, the client's own margin is not the window.
+        assert!(client_edge_at(&visible, Point::from((-2.0, 300.0))).is_empty());
+        // Just inside: the border.
+        assert_eq!(
+            client_edge_at(&visible, Point::from((2.0, 300.0))),
+            ResizeEdge::LEFT
+        );
+        assert_eq!(
+            client_edge_at(&visible, Point::from((798.0, 300.0))),
+            ResizeEdge::RIGHT
+        );
+        assert_eq!(
+            client_edge_at(&visible, Point::from((400.0, 1.0))),
+            ResizeEdge::TOP
+        );
+        assert_eq!(
+            client_edge_at(&visible, Point::from((400.0, 598.0))),
+            ResizeEdge::BOTTOM
+        );
+        // The corner is both edges.
+        assert_eq!(
+            client_edge_at(&visible, Point::from((799.0, 599.0))),
+            ResizeEdge::BOTTOM_RIGHT
+        );
+        // Deeper inside: the client handles the click.
+        assert!(client_edge_at(&visible, Point::from((400.0, 300.0))).is_empty());
     }
 
     #[test]

@@ -532,20 +532,24 @@ impl Mriya {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space
-            .element_under(pos)
-            .and_then(|(window, location)| {
-                window
-                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                    .map(|(surface, point)| (surface, (point + location).to_f64()))
-            })
+        self.window_under(pos).and_then(|(window, location)| {
+            window
+                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                .map(|(surface, point)| (surface, (point + location).to_f64()))
+        })
     }
 
     /// Window below the given position, together with its location.
+    ///
+    /// Only the interactive rectangle counts (see [`decor::interactive_rect`]),
+    /// not the whole surface.
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(Window, Point<i32, Logical>)> {
-        self.space
-            .element_under(pos)
-            .map(|(window, location)| (window.clone(), location))
+        self.space.elements().rev().find_map(|window| {
+            let location = self.space.element_location(window)?;
+            let rect = decor::interactive_rect(self.theme.as_ref(), window, location);
+            (rect.size.w > 0 && rect.size.h > 0 && rect.to_f64().contains(pos))
+                .then(|| (window.clone(), location))
+        })
     }
 
     /// Raise `window` and give it keyboard focus.
