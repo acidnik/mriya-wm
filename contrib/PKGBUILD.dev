@@ -12,7 +12,10 @@ _git_dir="$startdir/.."
 _crate_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' "$_git_dir/Cargo.toml" | head -1)
 _git_count=$(git -C "$_git_dir" rev-list --count HEAD 2>/dev/null || echo 0)
 _git_rev=$(git -C "$_git_dir" rev-parse --short HEAD 2>/dev/null || echo nogit)
-if [ -n "$(git -C "$_git_dir" status --porcelain 2>/dev/null)" ]; then
+# Только правки уже отслеживаемых файлов: `makepkg` запускает git с
+# GIT_CONFIG_GLOBAL=/dev/null, поэтому неотслеживаемое (и обычно игнорируемое
+# глобально) всплывает и делало бы версию вечно «.dirty».
+if [ -n "$(git -C "$_git_dir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     _git_dirty=".dirty"
 else
     _git_dirty=""

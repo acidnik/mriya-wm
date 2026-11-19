@@ -4,3 +4,5 @@
 contrib/src
 contrib/pkg
 contrib/*.pkg.tar.zst
+# состояние локальных инструментов
+.unipi/
