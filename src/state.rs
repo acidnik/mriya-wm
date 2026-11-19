@@ -55,8 +55,12 @@ pub struct Mriya {
     pub display_handle: DisplayHandle,
     pub loop_signal: LoopSignal,
 
-    /// Stacking order and position of all mapped windows.
+    /// Stacking order and position of the windows of the *active* workspace.
     pub space: Space<Window>,
+    /// Windows of the other workspaces; `workspaces[active_workspace]` holds the
+    /// stack that was active before the last switch.
+    pub workspaces: Vec<Space<Window>>,
+    pub active_workspace: usize,
     pub popups: PopupManager,
 
     /// Last known pointer position, in output coordinates.
@@ -110,6 +114,8 @@ pub struct Mriya {
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
     pub layer_shell_state: WlrLayerShellState,
+    /// `ext-workspace-v1` handles for panels (waybar).
+    pub ext_workspace_state: crate::ext_workspace::ExtWorkspaceState,
     pub seat_state: SeatState<Mriya>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -135,6 +141,7 @@ impl Mriya {
         let xdg_shell_state = XdgShellState::new::<Self>(&display_handle);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&display_handle);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
+        let ext_workspace_state = crate::ext_workspace::ExtWorkspaceState::new(&display_handle);
         let shm_state = ShmState::new::<Self>(&display_handle, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
@@ -186,6 +193,8 @@ impl Mriya {
             display_handle,
             loop_signal,
             space: Space::default(),
+            workspaces: Vec::new(),
+            active_workspace: 0,
             popups: PopupManager::default(),
             pointer_location: (0.0, 0.0).into(),
             cursor_status: CursorImageStatus::default_named(),
@@ -210,6 +219,7 @@ impl Mriya {
             shm_state,
             output_manager_state,
             layer_shell_state,
+            ext_workspace_state,
             seat_state,
             data_device_state,
             primary_selection_state,
@@ -515,6 +525,12 @@ impl Mriya {
             }
             Action::Spawn(argv) => self.spawner.spawn(&argv),
             Action::SpawnShell(command) => self.spawner.spawn_shell(&command),
+            Action::FocusWorkspace(index) => self.switch_workspace(index - 1),
+            Action::FocusWorkspaceRelative(delta) => self.switch_workspace_relative(delta),
+            Action::MoveWindowToWorkspace(index) => self.move_window_to_workspace(index - 1),
+            Action::MoveWindowToWorkspaceRelative(delta) => {
+                self.move_window_to_workspace_relative(delta)
+            }
             Action::SpawnTerminal => match crate::spawn::default_terminal() {
                 Some(argv) => self.spawner.spawn(&argv),
                 None => debug!("no terminal found for spawn-terminal"),
@@ -571,9 +587,14 @@ impl Mriya {
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        // The second value is where the returned surface *starts* in space:
+        // smithay subtracts it from the pointer position before handing the
+        // event to the client. Passing the pointer position itself made every
+        // client see the pointer at (0, 0).
+        //
         // Panels first: the bar sits above the windows and swallows clicks
         // there, while a wallpaper layer sits below them.
-        if let Some((surface, _)) = crate::layers::surface_under(
+        if let Some((surface, point, _)) = crate::layers::surface_under(
             &self.space,
             pos,
             &[
@@ -581,7 +602,7 @@ impl Mriya {
                 smithay::wayland::shell::wlr_layer::Layer::Top,
             ],
         ) {
-            return Some((surface.clone(), pos));
+            return Some((surface, point));
         }
 
         if let Some((window, location)) = self.window_under(pos) {
@@ -600,7 +621,7 @@ impl Mriya {
                 smithay::wayland::shell::wlr_layer::Layer::Background,
             ],
         )
-        .map(|(surface, _)| (surface, pos))
+        .map(|(surface, origin, _)| (surface, origin))
     }
 
     /// Layer surface that owns the pointer position, if any.
@@ -615,7 +636,7 @@ impl Mriya {
                 smithay::wayland::shell::wlr_layer::Layer::Background,
             ],
         )
-        .map(|(_, layer)| layer)
+        .map(|(_, _, layer)| layer)
     }
 
     /// Window below the given position, together with its location.

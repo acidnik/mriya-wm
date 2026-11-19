@@ -4,8 +4,10 @@
 // ничего не знают про оконный менеджер. Модулей `niri/*`, `hyprland/*`, `sway/*`
 // тут нет — они общаются с IPC конкретного композитора.
 //
+// Воркспейсы Mriya отдаёт по универсальному протоколу ext-workspace-v1, поэтому
+// здесь работает `ext/workspaces` (не `niri/*`).
+//
 // Чего в Mriya пока нет (модули закомментированы ниже):
-//   ext/workspaces — нужен протокол ext-workspace-v1 и сами воркспейсы;
 //   wlr/taskbar    — нужен wlr-foreign-toplevel-management;
 //   idle_inhibitor — нужен zwp_idle_inhibit_manager_v1.
 //
@@ -23,9 +25,16 @@
   "margin-left": 0,
   "margin-right": 0,
   "fixed-center": true,
-  "modules-left": ["clock"],
+  "modules-left": ["ext/workspaces", "clock"],
   "modules-center": ["cpu", "memory", "temperature"],
   "modules-right": ["network", "pulseaudio", "tray"],
+
+  "ext/workspaces": {
+    "format": "{name}",
+    "on-click": "activate",
+    "on-scroll-up": "activate",
+    "tooltip": false
+  },
 
   "clock": {
     "format": "{:%a %d %b  %H:%M}",
@@ -107,11 +116,6 @@
   },
 
   // Закомментировано: нужны протоколы, которых у Mriya ещё нет.
-  //
-  // "ext/workspaces": {
-  //   "format": "{name}",
-  //   "on-click": "activate"
-  // },
   //
   // "wlr/taskbar": {
   //   "format": "{icon}",

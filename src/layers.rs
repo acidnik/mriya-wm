@@ -56,7 +56,7 @@ pub fn surface_under(
     space: &Space<Window>,
     pos: Point<f64, Logical>,
     layers: &[Layer],
-) -> Option<(WlSurface, LayerSurface)> {
+) -> Option<(WlSurface, Point<f64, Logical>, LayerSurface)> {
     let output = space.outputs().next()?;
     let output_geo = space.output_geometry(output)?;
     let map = layer_map_for_output(output);
@@ -69,10 +69,13 @@ pub fn surface_under(
         let Some(geometry) = map.layer_geometry(found) else {
             continue;
         };
-        if let Some((surface, _)) =
+        if let Some((surface, point)) =
             found.surface_under(local - geometry.loc.to_f64(), WindowSurfaceType::ALL)
         {
-            return Some((surface, found.clone()));
+            // `point` is where the surface sits inside the layer tree, so the
+            // origin in space is the layer's own position plus that offset.
+            let origin = output_geo.loc.to_f64() + geometry.loc.to_f64() + point.to_f64();
+            return Some((surface, origin, found.clone()));
         }
     }
     None

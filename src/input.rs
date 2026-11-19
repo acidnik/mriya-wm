@@ -175,7 +175,7 @@ impl Mriya {
         }
     }
 
-    fn pointer_motion_to(&mut self, pos: Point<f64, Logical>, time: u32) {
+    pub(crate) fn pointer_motion_to(&mut self, pos: Point<f64, Logical>, time: u32) {
         tracing::trace!(?pos, "pointer motion");
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
@@ -446,7 +446,13 @@ impl Mriya {
         self.frame_cursor(false);
     }
 
-    fn clear_focus(&mut self, serial: Serial) {
+    /// Re-resolve the surface under the pointer, e.g. after a workspace switch.
+    pub(crate) fn refresh_pointer_focus(&mut self) {
+        let location = self.pointer_location;
+        self.pointer_motion_to(location, 0);
+    }
+
+    pub(crate) fn clear_focus(&mut self, serial: Serial) {
         for window in self.space.elements() {
             decor::state_mut(window).active = false;
             if window.toplevel().is_none() {

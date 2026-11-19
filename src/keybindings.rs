@@ -54,6 +54,22 @@ pub enum Action {
     SpawnShell(String),
     /// Start the default terminal (`$TERMINAL` or the first one found in `PATH`).
     SpawnTerminal,
+    /// Show workspace `N` (one based, like niri).
+    FocusWorkspace(usize),
+    /// Show the next or previous workspace.
+    FocusWorkspaceRelative(i32),
+    /// Move the focused window to workspace `N` (one based).
+    MoveWindowToWorkspace(usize),
+    /// Move the focused window one workspace up or down.
+    MoveWindowToWorkspaceRelative(i32),
+}
+
+/// First integer argument of an action node.
+fn first_integer(node: &KdlNode) -> Option<i128> {
+    node.entries()
+        .iter()
+        .filter(|entry| entry.name().is_none())
+        .find_map(|entry| entry.value().as_integer())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,25 +108,47 @@ impl Default for Keybindings {
 /// Bindings used when the config does not define any.
 pub fn default_binds() -> Vec<Binding> {
     let alias = ModAlias::Alt;
-    [
+    let mut binds: Vec<(String, Action)> = [
         // A terminal is the way to start anything else, so it works out of the
         // box, even without a config file.
-        ("Mod+Return", Action::SpawnTerminal),
-        ("Mod+q", Action::CloseWindow),
-        ("Mod+Escape", Action::Quit),
-        ("Mod+f", Action::FullscreenWindow),
-        ("Mod+m", Action::MaximizeWindow),
+        ("Mod+Return".to_string(), Action::SpawnTerminal),
+        ("Mod+q".to_string(), Action::CloseWindow),
+        ("Mod+Escape".to_string(), Action::Quit),
+        ("Mod+f".to_string(), Action::FullscreenWindow),
+        ("Mod+m".to_string(), Action::MaximizeWindow),
+        (
+            "Mod+Page_Up".to_string(),
+            Action::FocusWorkspaceRelative(-1),
+        ),
+        (
+            "Mod+Page_Down".to_string(),
+            Action::FocusWorkspaceRelative(1),
+        ),
     ]
     .into_iter()
-    .filter_map(|(chord, action)| {
-        let (mods, keysym) = parse_chord(chord, alias).ok()?;
-        Some(Binding {
-            mods,
-            keysym,
-            actions: vec![action],
+    .collect();
+
+    // Workspaces 1..9, like niri: `Mod+N` switches, `Mod+Shift+N` moves the
+    // focused window there.
+    for index in 1..=9usize {
+        binds.push((format!("Mod+{index}"), Action::FocusWorkspace(index)));
+        binds.push((
+            format!("Mod+Shift+{index}"),
+            Action::MoveWindowToWorkspace(index),
+        ));
+    }
+
+    binds
+        .into_iter()
+        .filter_map(|(chord, action)| {
+            let (mods, keysym) = parse_chord(&chord, alias).ok()?;
+            Some(Binding {
+                mods,
+                keysym,
+                actions: vec![action],
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 /// Parse a chord like `Mod+Shift+q` into its modifiers and key symbol.
@@ -185,6 +223,18 @@ pub fn parse_action(node: &KdlNode) -> Result<Action, String> {
             }
         }
         "spawn-terminal" => Ok(Action::SpawnTerminal),
+        "focus-workspace" => match first_integer(node) {
+            Some(index) if index > 0 => Ok(Action::FocusWorkspace(index as usize)),
+            _ => Err("focus-workspace needs a workspace number".to_string()),
+        },
+        "focus-workspace-up" => Ok(Action::FocusWorkspaceRelative(-1)),
+        "focus-workspace-down" => Ok(Action::FocusWorkspaceRelative(1)),
+        "move-window-to-workspace" => match first_integer(node) {
+            Some(index) if index > 0 => Ok(Action::MoveWindowToWorkspace(index as usize)),
+            _ => Err("move-window-to-workspace needs a workspace number".to_string()),
+        },
+        "move-window-to-workspace-up" => Ok(Action::MoveWindowToWorkspaceRelative(-1)),
+        "move-window-to-workspace-down" => Ok(Action::MoveWindowToWorkspaceRelative(1)),
         "spawn-sh" => match string_args(node).first() {
             Some(command) => Ok(Action::SpawnShell(command.clone())),
             None => Err("spawn-sh without a command".to_string()),

@@ -100,17 +100,21 @@ window#waybar {
   background: rgba(243, 139, 168, 0.25);
 }
 
-/* Когда появятся воркспейсы (ext/workspaces):
- *
- * #workspaces button {
- *   padding: 0 6px;
- *   border-radius: 6px;
- *   background: transparent;
- * }
- * #workspaces button.active {
- *   background: rgba(137, 180, 250, 0.28);
- * }
- * #workspaces button:hover {
- *   background: rgba(255, 255, 255, 0.08);
- * }
- */
+#workspaces button {
+  padding: 0 7px;
+  margin: 4px 1px;
+  border-radius: 6px;
+  background: transparent;
+  color: #8b93a7;
+}
+
+#workspaces button.active {
+  background: rgba(137, 180, 250, 0.28);
+  color: #cdd6f4;
+}
+
+#workspaces button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  border: none;
+}

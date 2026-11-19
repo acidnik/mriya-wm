@@ -9,6 +9,7 @@ mod config;
 mod config_watch;
 mod cursor;
 mod decor;
+mod ext_workspace;
 mod grabs;
 mod handlers;
 mod input;
@@ -17,6 +18,7 @@ mod layers;
 mod shell;
 mod spawn;
 mod state;
+mod workspaces;
 
 use std::{env, path::PathBuf};
 

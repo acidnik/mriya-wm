@@ -79,7 +79,8 @@ pub fn run(mut event_loop: EventLoop<Mriya>, mut state: Mriya) -> Result<()> {
     state
         .shm_state
         .update_formats(graphics.renderer().shm_formats());
-    state.space.map_output(&output, (0, 0));
+    state.map_output_everywhere(&output, smithay::utils::Point::from((0, 0)));
+    state.ensure_workspace(crate::workspaces::DEFAULT_WORKSPACES - 1);
 
     let renderer = NestedRenderer {
         damage_tracker: OutputDamageTracker::from_output(&output),
