@@ -21,7 +21,10 @@ cargo fmt
 ```
 
 Документация — `docs/architecture.md` (по-русски, по итерациям); пример конфига
-— `docs/example-config.kdl`; конфиг панели — `examples/waybar/`.
+— `docs/example-config.kdl` (он же ставится в `/usr/share/mriya/example-config.kdl`);
+дефолтный конфиг — `dist/config.kdl` (встраивается в бинарь через `include_str!`
+и пишется в `~/.config/mriya/config.kdl` при первом запуске, если файла нет);
+конфиг панели — `dist/waybar/` (ставится в `/usr/share/mriya/waybar/`).
 
 ## DRM-бэкенд: как проверять
 

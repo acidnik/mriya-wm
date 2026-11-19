@@ -17,6 +17,21 @@
 - Рендер: `GlesRenderer` (EGL/GLES2), кадр рисуется по требованию
   (когда сцена изменилась), а не постоянным циклом.
 
+### Итерация 19 — дефолтный конфиг и панель из коробки
+
+- `dist/config.kdl` встраивается в бинарь (`include_str!`) и при первом запуске
+  без `--config` пишется в `$XDG_CONFIG_HOME/mriya/config.kdl`. Без него сессия с
+  greeter-а — это чёрный экран, потому что в дефолтах нет ни `spawn-at-startup`,
+  ни раскладки, ни темы.
+- В дефолтном конфиге сразу есть терминал/закрытие/максимизация/фуллскрин,
+  воркспейсы 1..9 (+Shift), громкость и запуск waybar с нашими конфигом и стилем
+  (`/usr/share/mriya/waybar/`).
+- `Mod` теперь значит Super в самостоятельной сессии и Alt во вложенной: alias
+  выбирается до разбора конфига (по `--drm`/отсутствию `WAYLAND_DISPLAY`) и
+  прокидывается в `default_binds`, поэтому дефолтные бинды тоже правильные.
+- Пакет ставит `/usr/share/mriya/config.kdl`, `example-config.kdl` и
+  `waybar/{config.jsonc,style.css}`.
+
 ### Итерация 18 — DRM/udev-бэкенд (запуск на TTY)
 
 - `Mriya::renderer` стал enum `Backend { Nested, Udev }`, а сцена собирается один
@@ -582,7 +597,7 @@ src/grabs/               интерактивное перемещение и р
 
 ## Панели
 
-`examples/waybar/` — конфиг и стиль waybar без привязки к конкретному
+`dist/waybar/` — конфиг и стиль waybar без привязки к конкретному
 композитору: только универсальные модули (clock, cpu, memory, temperature, disk,
 network, pulseaudio, tray). Модули `niri/*`, `hyprland/*`, `sway/*` говорят с
 IPC своего композитора и здесь не работают; `ext/workspaces` требует протокола
@@ -590,7 +605,8 @@ IPC своего композитора и здесь не работают; `ex
 management`, `idle_inhibitor` — `zwp_idle_inhibit_manager_v1`. Все три пока
 закомментированы в конфиге.
 
-Запуск: `waybar -c examples/waybar/config.jsonc -s examples/waybar/style.css`.
+Ставится в `/usr/share/mriya/waybar/`, оттуда его и запускает дефолтный конфиг
+Mriya (`dist/config.kdl`, он же `/usr/share/mriya/config.kdl`).
 
 ## Следующие шаги
 

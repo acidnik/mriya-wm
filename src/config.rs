@@ -16,7 +16,10 @@ use tracing::{debug, info, warn};
 use crate::keybindings::{self, Binding, ModAlias};
 
 /// Everything Mriya reads from `config.kdl`.
-#[derive(Debug, Clone)]
+///
+/// `Default` is what the parser starts from: no binds, so `from_document` can
+/// install the built-in ones with the right `Mod` alias.
+#[derive(Debug, Clone, Default)]
 pub struct Config {
     pub cursor: CursorConfig,
     pub decorations: DecorationsConfig,
@@ -143,20 +146,6 @@ impl XkbSettings {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            cursor: CursorConfig::default(),
-            decorations: DecorationsConfig::default(),
-            keyboard: KeyboardConfig::default(),
-            binds: keybindings::default_binds(),
-            spawn_at_startup: Vec::new(),
-            environment: Vec::new(),
-            window_rules: Vec::new(),
-        }
-    }
-}
-
 /// `$XDG_CONFIG_HOME/mriya/config.kdl`, falling back to `~/.config/...`.
 pub fn default_path() -> Option<PathBuf> {
     let base = match env::var_os("XDG_CONFIG_HOME") {
@@ -169,20 +158,22 @@ pub fn default_path() -> Option<PathBuf> {
 /// Load the config, falling back to defaults when the file is missing or
 /// broken. The compositor must keep running in both cases.
 pub fn load_or_default(path: Option<&Path>, mod_alias: ModAlias) -> Config {
+    // Built-in defaults still need the `Mod` alias, so go through the parser.
+    let defaults = || from_document(&kdl::KdlDocument::new(), mod_alias);
     let Some(path) = path else {
         warn!("no config path available, using built-in defaults");
-        return Config::default();
+        return defaults();
     };
 
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             info!(path = %path.display(), "no config file, using defaults");
-            return Config::default();
+            return defaults();
         }
         Err(err) => {
             warn!(path = %path.display(), %err, "cannot read config, using defaults");
-            return Config::default();
+            return defaults();
         }
     };
 
@@ -193,7 +184,7 @@ pub fn load_or_default(path: Option<&Path>, mod_alias: ModAlias) -> Config {
         }
         Err(err) => {
             warn!(path = %path.display(), %err, "config is invalid, using defaults");
-            Config::default()
+            defaults()
         }
     }
 }
@@ -264,7 +255,7 @@ fn from_document(document: &KdlDocument, mod_alias: ModAlias) -> Config {
 
     if config.binds.is_empty() {
         debug!("no binds in the config, installing the default ones");
-        config.binds = keybindings::default_binds();
+        config.binds = keybindings::default_binds(mod_alias);
     }
 
     config
@@ -693,6 +684,9 @@ binds {
     #[test]
     fn empty_config_gets_default_binds() {
         let config = parse("", ModAlias::Alt).expect("empty config parses");
-        assert_eq!(config.binds, keybindings::default_binds());
+        assert_eq!(
+            config.binds,
+            keybindings::default_binds(crate::keybindings::ModAlias::Alt)
+        );
     }
 }

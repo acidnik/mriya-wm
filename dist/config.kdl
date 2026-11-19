@@ -1,0 +1,80 @@
+// Конфиг Mriya WM.
+//
+// Этот файл создаётся автоматически при первом запуске, если
+// $XDG_CONFIG_HOME/mriya/config.kdl (обычно ~/.config/mriya/config.kdl) ещё нет.
+// Копия того, что установлено в /usr/share/mriya/config.kdl.
+//
+// Секции и синтаксис — как в niri: незнакомые секции игнорируются с сообщением
+// в лог, а не ломают разбор. Ссылка на формат: https://kdl.dev
+//
+// Полный список опций с комментариями: /usr/share/mriya/example-config.kdl
+
+// Курсор. Если тема не задана, берётся XCURSOR_THEME, затем "default"
+// (в Arch это /usr/share/icons/default).
+cursor {
+    // xcursor-theme "Adwaita"
+    xcursor-size 24
+}
+
+// Рамки окон: темы xfwm4 из /usr/share/themes (пакет xfwm4-themes),
+// ~/.themes и ~/.local/share/themes. Список: `mriya-wm --list-themes`.
+decorations {
+    theme "Default"
+    title-font "Sans Bold 9"
+    shadows true
+}
+
+// Раскладка клавиатуры. Для двух языков: layout "us,ru"; options "grp:caps_toggle".
+input {
+    keyboard {
+        xkb {
+            layout "us"
+        }
+        repeat-delay 350
+        repeat-rate 25
+    }
+}
+
+// Что запустить при старте сессии. waybar ставится пакетом waybar:
+//   pacman -S waybar
+// Конфиг и стиль панели лежат в /usr/share/mriya/waybar.
+spawn-at-startup "waybar" "-c" "/usr/share/mriya/waybar/config.jsonc" "-s" "/usr/share/mriya/waybar/style.css"
+
+// Горячие клавиши. Mod = Super в самостоятельной сессии и Alt во вложенной
+// (внутри чужой сессии Super обычно уже занят).
+binds {
+    Mod+Return { spawn-terminal; }
+    Mod+q { close-window; }
+    Mod+m { maximize-window; }
+    Mod+f { fullscreen-window; }
+    Mod+Escape { quit; }
+
+    // Воркспейсы 1..9, как в niri: Mod+N — перейти, Mod+Shift+N — перенести окно.
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+    Mod+4 { focus-workspace 4; }
+    Mod+5 { focus-workspace 5; }
+    Mod+6 { focus-workspace 6; }
+    Mod+7 { focus-workspace 7; }
+    Mod+8 { focus-workspace 8; }
+    Mod+9 { focus-workspace 9; }
+
+    Mod+Shift+1 { move-window-to-workspace 1; }
+    Mod+Shift+2 { move-window-to-workspace 2; }
+    Mod+Shift+3 { move-window-to-workspace 3; }
+    Mod+Shift+4 { move-window-to-workspace 4; }
+    Mod+Shift+5 { move-window-to-workspace 5; }
+    Mod+Shift+6 { move-window-to-workspace 6; }
+    Mod+Shift+7 { move-window-to-workspace 7; }
+    Mod+Shift+8 { move-window-to-workspace 8; }
+    Mod+Shift+9 { move-window-to-workspace 9; }
+
+    Mod+Page_Up { focus-workspace-up; }
+    Mod+Page_Down { focus-workspace-down; }
+
+    // Громкость, как в niri.
+    XF86AudioRaiseVolume { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "0.05+"; }
+    XF86AudioLowerVolume { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "0.05-"; }
+    XF86AudioMute { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SINK@" "toggle"; }
+}

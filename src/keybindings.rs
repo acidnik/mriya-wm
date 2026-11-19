@@ -101,13 +101,12 @@ impl Keybindings {
 
 impl Default for Keybindings {
     fn default() -> Self {
-        Self::new(default_binds())
+        Self::new(default_binds(ModAlias::Alt))
     }
 }
 
 /// Bindings used when the config does not define any.
-pub fn default_binds() -> Vec<Binding> {
-    let alias = ModAlias::Alt;
+pub fn default_binds(alias: ModAlias) -> Vec<Binding> {
     let mut binds: Vec<(String, Action)> = [
         // A terminal is the way to start anything else, so it works out of the
         // box, even without a config file.

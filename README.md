@@ -29,9 +29,15 @@ are implemented; other niri sections are ignored for now.
 See [docs/architecture.md](docs/architecture.md) for the code layout, keybindings
 and next steps (the doc is in Russian).
 
+The first start writes a default config to `~/.config/mriya/config.kdl` (the
+copy that ships with the package is `/usr/share/mriya/config.kdl`, with a
+documented example next to it in `example-config.kdl`), so a fresh session is not
+a black screen.
+
 Panels: `zwlr_layer_shell_v1` is supported (panels, bars, wallpapers reserve
-their space), so waybar works. A compositor-agnostic waybar config and style
-live in [examples/waybar](examples/waybar).
+their space), so waybar works. The default config starts it with the config and
+style from [dist/waybar](dist/waybar), installed into
+`/usr/share/mriya/waybar/`.
 
 ## Standalone session
 

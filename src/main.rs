@@ -32,6 +32,16 @@ fn main() -> Result<()> {
     init_tracing();
 
     let args = parse_args()?;
+    // A display manager starts us without a Wayland display; there we own the
+    // seat and `Mod` means Super. Nested, the parent session usually owns
+    // Super, so `Mod` becomes Alt.
+    let use_drm = args.drm
+        || (env::var_os("WAYLAND_DISPLAY").is_none() && std::path::Path::new("/dev/dri").exists());
+    let mod_alias = if use_drm {
+        ModAlias::Super
+    } else {
+        ModAlias::Alt
+    };
     if args.list_themes {
         use std::io::Write;
         let mut stdout = std::io::stdout();
@@ -43,7 +53,7 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let (config, config_path) = load_config(&args);
+    let (config, config_path) = load_config(&args, mod_alias);
 
     // niri-compatible: `environment { ... }` is exported to the session and to
     // every client we start.
@@ -54,6 +64,7 @@ fn main() -> Result<()> {
     let mut event_loop: EventLoop<Mriya> = EventLoop::try_new()?;
     let display: Display<Mriya> = Display::new()?;
     let mut state = Mriya::new(&mut event_loop, display, config);
+    state.mod_alias = mod_alias;
     state.config_path = config_path.clone();
 
     info!(socket = %state.socket_name.to_string_lossy(), "Mriya WM is ready");
@@ -71,11 +82,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // A display manager starts us without a Wayland display and with a DRM
-    // device available; in a nested session there is a parent compositor to
-    // draw into. `--drm` forces the first.
-    let use_drm = args.drm
-        || (env::var_os("WAYLAND_DISPLAY").is_none() && std::path::Path::new("/dev/dri").exists());
     if use_drm {
         info!("starting the DRM backend");
         backend::udev::run(event_loop, state)
@@ -92,10 +98,41 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
-fn load_config(args: &Args) -> (Config, Option<PathBuf>) {
-    // `Mod` is Alt while nested: the session we run in usually binds Super.
-    let mod_alias = ModAlias::Alt;
+/// Config shipped with the compositor, written to the user's config directory
+/// on the first start so a fresh session is not a black screen.
+const DEFAULT_CONFIG: &str = include_str!("../dist/config.kdl");
+
+/// Create `~/.config/mriya/config.kdl` when it does not exist yet.
+fn seed_default_config(path: &std::path::Path) {
+    if path.exists() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            tracing::warn!(path = %parent.display(), %err, "cannot create the config directory");
+            return;
+        }
+    }
+    match std::fs::write(path, DEFAULT_CONFIG) {
+        Ok(()) => info!(
+            path = %path.display(),
+            "no config found, wrote the default one"
+        ),
+        Err(err) => tracing::warn!(
+            path = %path.display(),
+            %err,
+            "cannot write the default config, continuing with built-in defaults"
+        ),
+    }
+}
+
+fn load_config(args: &Args, mod_alias: ModAlias) -> (Config, Option<PathBuf>) {
     let path = args.config.clone().or_else(config::default_path);
+    if args.config.is_none() {
+        if let Some(path) = &path {
+            seed_default_config(path);
+        }
+    }
 
     match &args.config {
         Some(explicit) => {
