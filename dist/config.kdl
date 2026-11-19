@@ -24,7 +24,15 @@ decorations {
     shadows true
 }
 
+// Масштаб вывода: по умолчанию считается из DPI панели (на 4K-ноутбуке выйдет 2,
+// на обычном мониторе 1). Здесь можно переопределить — для всех сразу или для
+// конкретного коннектора (имя видно в логе: "output configured connector=eDP-1").
+// output { scale 1.5 }
+// output "eDP-1" { scale 1.75 }
+
 // Раскладка клавиатуры. Для двух языков: layout "us,ru"; options "grp:caps_toggle".
+// Настройки тачпада/мыши применяет libinput, то есть только в самостоятельной
+// сессии (вложенная наследует настройки родительского композитора).
 input {
     keyboard {
         xkb {
@@ -32,6 +40,19 @@ input {
         }
         repeat-delay 350
         repeat-rate 25
+    }
+
+    touchpad {
+        tap true                 // тап = клик
+        natural-scroll true      // прокрутка «как на телефоне»
+        dwt true                 // не реагировать, пока печатаешь
+        accel-speed 0.2          // -1.0 .. 1.0
+        scroll-method "two-finger"
+    }
+
+    mouse {
+        natural-scroll false
+        accel-speed 0.0
     }
 }
 

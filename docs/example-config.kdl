@@ -51,6 +51,10 @@ decorations {
     }
 }
 
+// Масштаб: по умолчанию из DPI панели, переопределяется для всех или по имени.
+// output { scale 1.5 }
+// output "eDP-1" { scale 1.75 }
+
 input {
     keyboard {
         xkb {
@@ -67,10 +71,11 @@ input {
         // track-layout "window"
     }
 
-    // Device settings (touchpad/mouse/trackpoint) are applied by libinput and
-    // will be honoured by the TTY backend; while nested they are ignored.
-    // touchpad { tap; natural-scroll; }
-    // mouse { accel-profile "flat"; }
+    // Настройки устройств применяет libinput, то есть только в самостоятельной
+    // сессии; во вложенной они игнорируются (наследуется конфиг хоста).
+    // touchpad { tap true; natural-scroll true; dwt true; accel-speed 0.2;
+    //            scroll-method "two-finger"; left-handed false; }
+    // mouse { natural-scroll false; accel-speed 0.0; left-handed false; }
 }
 
 // Environment variables for the session and for every client started by Mriya.

@@ -65,6 +65,9 @@ pub struct Mriya {
 
     /// Last known pointer position, in output coordinates.
     pub pointer_location: Point<f64, Logical>,
+    /// Accumulate relative pointer motion (libinput: mouse, touchpad). The nested
+    /// backend gets absolute positions from the host instead.
+    pub relative_motion: bool,
     /// Cursor image requested by the focused client.
     pub cursor_status: CursorImageStatus,
     /// Shape the window manager wants regardless of the client (window frame
@@ -201,6 +204,7 @@ impl Mriya {
             active_workspace: 0,
             popups: PopupManager::default(),
             pointer_location: (0.0, 0.0).into(),
+            relative_motion: false,
             cursor_status: CursorImageStatus::default_named(),
             cursor_override: None,
             suppressed_keys: Vec::new(),
@@ -665,6 +669,26 @@ impl Mriya {
             ],
         )
         .map(|(surface, origin, _)| (surface, origin))
+    }
+
+    /// Scale for an output: a config override wins, otherwise `auto` (derived
+    /// from the panel's DPI) is used.
+    pub fn scale_for_output(&self, connector: &str, auto: f64) -> f64 {
+        let named = self
+            .config
+            .outputs
+            .iter()
+            .filter(|output| output.name.as_deref() == Some(connector))
+            .filter_map(|output| output.scale)
+            .next_back();
+        let fallback = self
+            .config
+            .outputs
+            .iter()
+            .filter(|output| output.name.is_none())
+            .filter_map(|output| output.scale)
+            .next_back();
+        named.or(fallback).unwrap_or(auto)
     }
 
     /// Layer surface that owns the pointer position, if any.

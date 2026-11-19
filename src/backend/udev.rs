@@ -34,14 +34,14 @@ use smithay::{
         udev::{primary_gpu, UdevBackend as UdevDeviceMonitor, UdevEvent},
     },
     input::pointer::CursorImageStatus,
-    output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
+    output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle, RegistrationToken},
         drm::control::{
             connector::{self, State as ConnectorState},
-            crtc, Device as ControlDevice, ModeTypeFlags,
+            crtc, Device as ControlDevice, Mode, ModeTypeFlags,
         },
-        input::{DeviceCapability, Libinput},
+        input::{self as libinput, DeviceCapability, Libinput},
     },
     utils::{DeviceFd, Logical},
 };
@@ -351,8 +351,16 @@ impl UdevBackend {
             .filter_map(|other| state.space.output_geometry(other).map(|geo| geo.size.w))
             .sum::<i32>();
         let position = smithay::utils::Point::<i32, Logical>::from((position, 0));
+        let auto_scale = auto_scale(info, mode);
+        let scale = state.scale_for_output(&name, auto_scale);
+        tracing::info!(connector = %name, scale, "output scale");
         output.set_preferred(wl_mode);
-        output.change_current_state(Some(wl_mode), None, None, Some(position));
+        output.change_current_state(
+            Some(wl_mode),
+            None,
+            Some(Scale::Fractional(scale)),
+            Some(position),
+        );
         state.map_output_everywhere(&output, position);
         crate::layers::arrange(&state.space);
 
@@ -417,6 +425,27 @@ impl UdevBackend {
     }
 }
 
+/// Scale for a panel, derived from its physical size.
+///
+/// A 4K 15" panel lands around 260 dpi and wants 2x; a 1080p one stays at 1x.
+/// `output "<connector>" { scale ... }` overrides this.
+fn auto_scale(info: &connector::Info, mode: Mode) -> f64 {
+    let (width_mm, height_mm) = info.size().unwrap_or((0, 0));
+    if width_mm == 0 || height_mm == 0 {
+        return 1.0;
+    }
+    let (width, height) = mode.size();
+    let diag_px = (f64::from(width).powi(2) + f64::from(height).powi(2)).sqrt();
+    let diag_inches = (f64::from(width_mm).powi(2) + f64::from(height_mm).powi(2)).sqrt() / 25.4;
+    let dpi = diag_px / diag_inches;
+    match dpi {
+        dpi if dpi >= 220.0 => 2.0,
+        dpi if dpi >= 175.0 => 1.5,
+        dpi if dpi >= 140.0 => 1.25,
+        _ => 1.0,
+    }
+}
+
 fn connector_name(info: &connector::Info) -> String {
     format!("{}-{}", info.interface().as_str(), info.interface_id())
 }
@@ -478,6 +507,9 @@ pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Resul
         shm_formats: Vec::new(),
     };
 
+    // libinput reports relative motion; the nested backend gets absolute.
+    state.relative_motion = true;
+
     // Open the devices that are already there, primary GPU first so the
     // renderer of the boot GPU exists before the others ask for it.
     let mut devices: Vec<(u64, PathBuf)> = monitor
@@ -516,6 +548,7 @@ pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Resul
                         device.led_update(keyboard.led_state().into());
                     }
                 }
+                configure_device(&state.config, device);
             }
             state.process_input_event(event);
             state.request_redraw();
@@ -589,4 +622,79 @@ pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Resul
             state.spawner.reap();
         })
         .context("event loop failed")
+}
+
+/// Apply the `input { touchpad { ... } }` / `input { mouse { ... } }` settings.
+///
+/// libinput keeps these per device, so they are pushed on every hotplug; devices
+/// that are already present show up as `DeviceAdded` right after the seat is
+/// assigned.
+fn configure_device(config: &crate::config::Config, device: &mut libinput::Device) {
+    use libinput::ScrollMethod;
+
+    // A device that supports tap-to-click is a touchpad.
+    let touchpad = device.config_tap_finger_count() > 0;
+    let pointer = device.has_capability(DeviceCapability::Pointer);
+    if !pointer && !touchpad {
+        return;
+    }
+
+    let apply = |name: &str, result: libinput::DeviceConfigResult| {
+        if let Err(err) = result {
+            tracing::warn!(setting = name, ?err, "cannot apply the input setting");
+        }
+    };
+
+    if touchpad {
+        let settings = &config.touchpad;
+        if let Some(enabled) = settings.tap {
+            apply("tap", device.config_tap_set_enabled(enabled));
+        }
+        if let Some(enabled) = settings.natural_scroll {
+            apply(
+                "touchpad natural-scroll",
+                device.config_scroll_set_natural_scroll_enabled(enabled),
+            );
+        }
+        if let Some(enabled) = settings.dwt {
+            apply("dwt", device.config_dwt_set_enabled(enabled));
+        }
+        if let Some(enabled) = settings.left_handed {
+            apply(
+                "touchpad left-handed",
+                device.config_left_handed_set(enabled),
+            );
+        }
+        if let Some(speed) = settings.accel_speed {
+            apply(
+                "touchpad accel-speed",
+                device.config_accel_set_speed(speed.clamp(-1.0, 1.0)),
+            );
+        }
+        if let Some(method) = settings.scroll_method {
+            let method = match method {
+                crate::config::ScrollMethod::TwoFinger => ScrollMethod::TwoFinger,
+                crate::config::ScrollMethod::Edge => ScrollMethod::Edge,
+                crate::config::ScrollMethod::Button => ScrollMethod::OnButtonDown,
+            };
+            apply("scroll-method", device.config_scroll_set_method(method));
+        }
+    } else {
+        let settings = &config.mouse;
+        if let Some(enabled) = settings.natural_scroll {
+            apply(
+                "mouse natural-scroll",
+                device.config_scroll_set_natural_scroll_enabled(enabled),
+            );
+        }
+        if let Some(enabled) = settings.left_handed {
+            apply("mouse left-handed", device.config_left_handed_set(enabled));
+        }
+        if let Some(speed) = settings.accel_speed {
+            apply(
+                "mouse accel-speed",
+                device.config_accel_set_speed(speed.clamp(-1.0, 1.0)),
+            );
+        }
+    }
 }

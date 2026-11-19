@@ -9,6 +9,7 @@ use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
         KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
+        PointerMotionEvent,
     },
     input::{
         keyboard::FilterResult,
@@ -75,9 +76,34 @@ impl Mriya {
                 self.pointer_motion_to(pos, event.time_msec());
                 self.update_frame_hover();
             }
-            // Relative motion only matters for the winit backend when the host
-            // sends it; the pointer position comes from absolute events there.
-            InputEvent::PointerMotion { .. } => {}
+            // libinput sends relative deltas for mice and touchpads; the nested
+            // backend gets absolute positions and must not apply these.
+            InputEvent::PointerMotion { event, .. } => {
+                if !self.relative_motion {
+                    return;
+                }
+                let Some(output) = self.space.outputs().next().cloned() else {
+                    return;
+                };
+                let Some(geometry) = self.space.output_geometry(&output) else {
+                    return;
+                };
+
+                let delta = event.delta();
+                let pos = self.pointer_location + delta;
+                let pos = Point::<f64, Logical>::from((
+                    pos.x.clamp(
+                        geometry.loc.x as f64,
+                        (geometry.loc.x + geometry.size.w) as f64 - 1.0,
+                    ),
+                    pos.y.clamp(
+                        geometry.loc.y as f64,
+                        (geometry.loc.y + geometry.size.h) as f64 - 1.0,
+                    ),
+                ));
+                self.pointer_motion_to(pos, event.time_msec());
+                self.update_frame_hover();
+            }
             InputEvent::PointerButton { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let pointer = self.seat.get_pointer().unwrap();

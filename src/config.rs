@@ -24,6 +24,12 @@ pub struct Config {
     pub cursor: CursorConfig,
     pub decorations: DecorationsConfig,
     pub keyboard: KeyboardConfig,
+    /// Touchpad settings applied by libinput (udev backend only).
+    pub touchpad: TouchpadConfig,
+    /// Mouse settings applied by libinput (udev backend only).
+    pub mouse: MouseConfig,
+    /// Per-output overrides; an entry without a name is the default for all.
+    pub outputs: Vec<OutputConfig>,
     /// Bindings in the order they were written; the first match wins.
     pub binds: Vec<Binding>,
     /// Commands started once the compositor is up.
@@ -113,6 +119,46 @@ impl WindowRule {
 pub struct CursorConfig {
     pub xcursor_theme: Option<String>,
     pub xcursor_size: Option<u32>,
+}
+
+/// `input { touchpad { ... } }`. Every option is optional: what is not written
+/// keeps libinput's (or the desktop's) default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TouchpadConfig {
+    /// Tap to click.
+    pub tap: Option<bool>,
+    pub natural_scroll: Option<bool>,
+    /// Disable the touchpad while typing.
+    pub dwt: Option<bool>,
+    pub left_handed: Option<bool>,
+    /// Acceleration curve speed, -1.0 .. 1.0.
+    pub accel_speed: Option<f64>,
+    pub scroll_method: Option<ScrollMethod>,
+}
+
+/// `input { mouse { ... } }`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MouseConfig {
+    pub natural_scroll: Option<bool>,
+    pub left_handed: Option<bool>,
+    pub accel_speed: Option<f64>,
+}
+
+/// Scroll method of a touchpad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollMethod {
+    TwoFinger,
+    Edge,
+    Button,
+}
+
+/// `output "<connector>" { scale 1.5 }`, or `output { scale 1.5 }` for all.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OutputConfig {
+    /// Connector name such as `eDP-1`; `None` means every output.
+    pub name: Option<String>,
+    /// Scale override; `None` lets the compositor derive it from the DPI.
+    pub scale: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -228,8 +274,9 @@ fn from_document(document: &KdlDocument, mod_alias: ModAlias) -> Config {
         match node.name().value() {
             "cursor" => parse_cursor(node, &mut config.cursor),
             "decorations" => parse_decorations(node, &mut config.decorations),
-            "input" => parse_input(node, &mut config.keyboard),
+            "input" => parse_input(node, &mut config),
             "binds" => parse_binds(node, &mut config.binds, mod_alias),
+            "output" => parse_output(node, &mut config.outputs),
             "spawn-at-startup" => {
                 let argv = string_args(node);
                 if argv.is_empty() {
@@ -274,6 +321,72 @@ fn parse_cursor(node: &KdlNode, cursor: &mut CursorConfig) {
             other => debug!(node = other, "cursor option is not supported yet, ignoring"),
         }
     }
+}
+
+fn parse_touchpad(node: &KdlNode, touchpad: &mut TouchpadConfig) {
+    let Some(children) = node.children() else {
+        return;
+    };
+    for child in children.nodes() {
+        match child.name().value() {
+            "tap" => touchpad.tap = first_bool(child),
+            "natural-scroll" => touchpad.natural_scroll = first_bool(child),
+            "dwt" => touchpad.dwt = first_bool(child),
+            "left-handed" => touchpad.left_handed = first_bool(child),
+            "accel-speed" => touchpad.accel_speed = first_float(child),
+            "scroll-method" => {
+                touchpad.scroll_method = match first_string(child).as_deref() {
+                    Some("two-finger") => Some(ScrollMethod::TwoFinger),
+                    Some("edge") => Some(ScrollMethod::Edge),
+                    Some("button") => Some(ScrollMethod::Button),
+                    other => {
+                        warn!(value = ?other, "scroll-method must be two-finger, edge or button");
+                        None
+                    }
+                }
+            }
+            other => debug!(
+                option = other,
+                "touchpad option is not supported yet, ignoring"
+            ),
+        }
+    }
+}
+
+fn parse_mouse(node: &KdlNode, mouse: &mut MouseConfig) {
+    let Some(children) = node.children() else {
+        return;
+    };
+    for child in children.nodes() {
+        match child.name().value() {
+            "natural-scroll" => mouse.natural_scroll = first_bool(child),
+            "left-handed" => mouse.left_handed = first_bool(child),
+            "accel-speed" => mouse.accel_speed = first_float(child),
+            other => debug!(
+                option = other,
+                "mouse option is not supported yet, ignoring"
+            ),
+        }
+    }
+}
+
+fn parse_output(node: &KdlNode, outputs: &mut Vec<OutputConfig>) {
+    let mut output = OutputConfig {
+        name: first_string(node),
+        ..OutputConfig::default()
+    };
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "scale" => output.scale = first_float(child).map(|scale| scale.clamp(0.5, 4.0)),
+                other => debug!(
+                    option = other,
+                    "output option is not supported yet, ignoring"
+                ),
+            }
+        }
+    }
+    outputs.push(output);
 }
 
 fn parse_decorations(node: &KdlNode, decorations: &mut DecorationsConfig) {
@@ -330,16 +443,17 @@ fn parse_decorations(node: &KdlNode, decorations: &mut DecorationsConfig) {
     }
 }
 
-fn parse_input(node: &KdlNode, keyboard: &mut KeyboardConfig) {
+fn parse_input(node: &KdlNode, config: &mut Config) {
     let Some(children) = node.children() else {
         return;
     };
     for child in children.nodes() {
         match child.name().value() {
-            "keyboard" => parse_keyboard(child, keyboard),
-            // touchpad/mouse/trackpoint settings are applied by libinput, which
-            // only the udev backend will have; the nested backend inherits the
-            // host's device configuration.
+            "keyboard" => parse_keyboard(child, &mut config.keyboard),
+            // Touchpad and mouse settings go to libinput, which only the udev
+            // backend drives; the nested backend inherits the host's devices.
+            "touchpad" => parse_touchpad(child, &mut config.touchpad),
+            "mouse" => parse_mouse(child, &mut config.mouse),
             other => debug!(
                 section = other,
                 "input section is not supported yet, ignoring"
@@ -514,6 +628,13 @@ fn first_string(node: &KdlNode) -> Option<String> {
         .find(|entry| entry.name().is_none())
         .and_then(|entry| entry.value().as_string())
         .map(str::to_string)
+}
+
+fn first_float(node: &KdlNode) -> Option<f64> {
+    node.entries()
+        .iter()
+        .find(|entry| entry.name().is_none())
+        .and_then(|entry| entry.value().as_float())
 }
 
 fn first_bool(node: &KdlNode) -> Option<bool> {

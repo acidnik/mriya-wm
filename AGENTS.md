@@ -54,6 +54,11 @@ output`. Ошибки `cannot open …` / `cannot become drm master` обычн�
 
 Отладка на конкретной карте: `MRIYA_DRM_DEVICE=/dev/dri/card1`.
 
+Экран и ввод в логе: `output scale connector=eDP-1 scale=2` (масштаб из DPI или
+из `output { scale }`), `output frame queued frames=1` (кадр реально ушёл в
+скан-аут), `cannot apply the input setting` (libinput не принял настройку
+тачпада/мыши).
+
 ## Осторожно с чужими процессами
 
 Никогда не убивать процессы пользователя по имени (`pkill -x waybar`,
