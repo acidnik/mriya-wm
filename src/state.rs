@@ -619,6 +619,10 @@ fn theme_fingerprint(theme: &Theme) -> (String, crate::decor::theme::ThemeParams
 
 /// Settings from `decorations { ... }` that win over the theme.
 fn apply_theme_overrides(params: &mut crate::decor::theme::ThemeParams, config: &Config) {
+    params.palette.set_prefer_literal(matches!(
+        config.decorations.palette_mode,
+        crate::config::PaletteMode::Theme
+    ));
     for (symbol, value) in &config.decorations.palette {
         if !params.palette.set(symbol, value) {
             tracing::warn!(symbol, value, "unknown or unparsable palette override");

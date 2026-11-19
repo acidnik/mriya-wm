@@ -200,6 +200,28 @@ impl Canvas {
     }
 
     /// Whether anything was painted at all.
+    /// Average brightness of the opaque pixels, 0.0 (black) .. 1.0 (white).
+    ///
+    /// Used to pick a text colour that stays readable on any theme: the preset
+    /// palette cannot know whether a titlebar ends up light or dark.
+    pub(crate) fn average_luminance(&self) -> f32 {
+        let mut sum = 0.0f32;
+        let mut count = 0u32;
+        for pixel in self.pixels.chunks_exact(4) {
+            if pixel[3] == 0 {
+                continue;
+            }
+            sum += 0.2126 * f32::from(pixel[0])
+                + 0.7152 * f32::from(pixel[1])
+                + 0.0722 * f32::from(pixel[2]);
+            count += 1;
+        }
+        if count == 0 {
+            return 0.0;
+        }
+        sum / count as f32 / 255.0
+    }
+
     pub(crate) fn has_content(&self) -> bool {
         self.pixels.chunks_exact(4).any(|pixel| pixel[3] > 8)
     }

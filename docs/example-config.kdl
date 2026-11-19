@@ -36,6 +36,13 @@ decorations {
     shadows true
     // shadow-opacity 30
 
+    // Символические цвета XPM (`c #D8D8D8 s active_color_2`): в xfwm4 их
+    // подставляет GTK-тема, которой у Mriya нет. "theme" (по умолчанию) —
+    // фон/границы/кнопки берут цвет, нарисованный в самом XPM, а акцентное
+    // семейство `_1` (тело заголовка) — из пресета Mriya; "preset" — вся
+    // палитра из пресета. Переключи, если тема выглядит чужой.
+    // palette-mode "theme"
+
     // Palette of the 24 symbols xfwm4 themes refer to instead of literal
     // colours. Only the ones a theme uses need to be set.
     palette {

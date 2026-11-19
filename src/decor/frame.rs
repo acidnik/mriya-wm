@@ -387,6 +387,23 @@ pub fn build(
     // Text, icon and buttons go on top as separate textures.
     let mut overlays: Vec<(i32, i32, MemoryRenderBuffer)> = Vec::new();
 
+    // The application icon sits at the left end of the titlebar and the title
+    // has to start after it, otherwise a left-aligned title runs underneath.
+    let icon_side = (geometry.top - 6).max(8).min(geometry.top - 2);
+    let icon = (theme.params.show_app_icon && theme.params.button_layout.contains('O'))
+        .then(|| icons.get(&state.app_id))
+        .flatten()
+        .map(|icon| {
+            let x = geometry.left + theme.params.button_offset + 2;
+            let y = ((geometry.top - icon_side) / 2).max(0);
+            (icon, x, y)
+        });
+    let left_limit = icon
+        .as_ref()
+        .map(|(_, x, _)| x + icon_side + 4)
+        .unwrap_or(strip_x + title_cap_width(theme, active));
+
+    let text_fallback = contrasting_text(&titlebar_canvas);
     if let Some((x, y, text_canvas)) = compose_title_text(
         theme,
         text,
@@ -398,22 +415,18 @@ pub fn build(
         title_cap_width(theme, active),
         (width - buttons.right_start + strip_x).max(0),
         geometry.top,
+        left_limit,
+        text_fallback,
     ) {
         if text_canvas.has_content() {
             overlays.push((x, y, text_canvas.to_buffer()));
         }
     }
 
-    if theme.params.show_app_icon && theme.params.button_layout.contains('O') {
-        if let Some(icon) = icons.get(&state.app_id) {
-            let icon_height = (geometry.top - 6).max(8);
-            let side = icon_height.min(geometry.top - 2);
-            let x = geometry.left + theme.params.button_offset + 2;
-            let y = ((geometry.top - side) / 2).max(0);
-            let mut icon_canvas = Canvas::new(side, side);
-            icon_canvas.blit_scaled(&icon, 0, 0, side, side);
-            overlays.push((x, y, icon_canvas.to_buffer()));
-        }
+    if let Some((icon, x, y)) = icon {
+        let mut icon_canvas = Canvas::new(icon_side, icon_side);
+        icon_canvas.blit_scaled(&icon, 0, 0, icon_side, icon_side);
+        overlays.push((x, y, icon_canvas.to_buffer()));
     }
 
     for (button, rect) in &buttons.buttons {
@@ -596,6 +609,8 @@ fn compose_title_text(
     w4: i32,
     w5: i32,
     height: i32,
+    left_limit: i32,
+    text_fallback: Rgba,
 ) -> Option<(i32, i32, Canvas)> {
     if state.title.is_empty() {
         return None;
@@ -603,7 +618,7 @@ fn compose_title_text(
 
     let params = &theme.params;
     let active = state.active;
-    let x0 = (strip_x + w1 + w2).max(strip_x);
+    let x0 = (strip_x + w1 + w2).max(strip_x).max(left_limit);
     let x1 = (strip_x + strip_width - w5 - w4).min(strip_x + strip_width);
     if x1 <= x0 {
         return None;
@@ -613,7 +628,7 @@ fn compose_title_text(
     } else {
         params.title_vertical_offset_inactive
     };
-    let color = theme_text_color(params, active);
+    let color = theme_text_color(params, active, text_fallback);
     let shadow = if active {
         params.title_shadow_active
     } else {
@@ -647,16 +662,27 @@ fn compose_title_text(
     Some((start_x, 0, canvas))
 }
 
-fn theme_text_color(params: &super::theme::ThemeParams, active: bool) -> Rgba {
+/// Title text colour: what the theme or the config asked for, otherwise black
+/// or white depending on how light the titlebar turned out.
+///
+/// The preset cannot know: `Redmond` has a light grey titlebar and needs black
+/// text, `Default` has a blue one and needs white.
+fn theme_text_color(params: &super::theme::ThemeParams, active: bool, fallback: Rgba) -> Rgba {
     let symbol = if active {
         "active_text_color"
     } else {
         "inactive_text_color"
     };
-    params
-        .palette
-        .get(symbol)
-        .unwrap_or(Rgba::rgb(255, 255, 255))
+    params.palette.explicit(symbol).unwrap_or(fallback)
+}
+
+/// Text colour that contrasts with the composed titlebar.
+fn contrasting_text(canvas: &Canvas) -> Rgba {
+    if canvas.average_luminance() > 0.6 {
+        Rgba::rgb(0x20, 0x20, 0x20)
+    } else {
+        Rgba::rgb(0xff, 0xff, 0xff)
+    }
 }
 
 fn theme_text_shadow_color(params: &super::theme::ThemeParams, active: bool) -> Rgba {

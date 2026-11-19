@@ -43,10 +43,25 @@ pub struct DecorationsConfig {
     pub button_layout: Option<String>,
     /// Palette overrides for the 24 xfwm4 colour symbols.
     pub palette: Vec<(String, String)>,
+    /// Where a symbolic XPM colour gets its value from when the theme also
+    /// draws a literal colour: the XPM itself (the theme's own look) or Mriya's
+    /// built-in palette preset.
+    pub palette_mode: PaletteMode,
     /// Draw drop shadows; `None` means "whatever the theme says".
     pub shadows: Option<bool>,
     /// Shadow opacity in percent, overriding the theme.
     pub shadow_opacity: Option<u8>,
+}
+
+/// Source of the symbolic XPM colours (xfwm4 takes them from the GTK theme,
+/// which Mriya does not have).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaletteMode {
+    /// The literal colour drawn in the XPM: what the theme author intended.
+    #[default]
+    Theme,
+    /// Mriya's built-in palette preset, ignoring the literal colour.
+    Preset,
 }
 
 /// What to do with decorations for a matching window.
@@ -285,6 +300,20 @@ fn parse_decorations(node: &KdlNode, decorations: &mut DecorationsConfig) {
                     first_integer(child).and_then(|value| u8::try_from(value.clamp(0, 100)).ok());
             }
             "title-font" => decorations.title_font = first_string(child),
+            "palette-mode" => {
+                match first_string(child)
+                    .as_deref()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("theme") => decorations.palette_mode = PaletteMode::Theme,
+                    Some("preset") => decorations.palette_mode = PaletteMode::Preset,
+                    other => warn!(
+                        value = ?other,
+                        "palette-mode is \"theme\" or \"preset\", keeping the default"
+                    ),
+                }
+            }
             "button-layout" => decorations.button_layout = first_string(child),
             "palette" => {
                 let Some(palette_children) = child.children() else {

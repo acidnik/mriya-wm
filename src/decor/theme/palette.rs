@@ -94,6 +94,11 @@ impl Rgba {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Palette {
     colors: [Rgba; 24],
+    /// Symbols whose value came from the theme (`themerc`) or the config rather
+    /// than from the built-in preset.
+    explicit: [bool; 24],
+    /// Whether the literal colour in an XPM wins over the preset.
+    prefer_literal: bool,
 }
 
 impl Default for Palette {
@@ -102,17 +107,48 @@ impl Default for Palette {
         for (index, value) in PRESET.iter().enumerate() {
             colors[index] = parse_color(value).unwrap_or(Rgba::TRANSPARENT);
         }
-        Self { colors }
+        Self {
+            colors,
+            explicit: [false; 24],
+            prefer_literal: true,
+        }
     }
 }
 
 impl Palette {
-    /// Colour bound to a symbol name.
+    /// Colour bound to a symbol name, whether it is explicit or a preset guess.
     pub fn get(&self, symbol: &str) -> Option<Rgba> {
         SYMBOLS
             .iter()
             .position(|name| *name == symbol)
             .map(|index| self.colors[index])
+    }
+
+    /// Colour that somebody actually asked for: a `themerc` value or a config
+    /// override. Everything else is Mriya's own approximation.
+    ///
+    /// The distinction matters because the literal colour in an XPM is worth
+    /// more than the preset for the theme's own chrome: xfwm4 always replaces
+    /// it with the GTK palette, so theme authors only keep it as the closest
+    /// approximation for a system without their GTK theme. Taking the preset
+    /// instead turned the grey buttons of `Redmond` blue.
+    pub fn explicit(&self, symbol: &str) -> Option<Rgba> {
+        SYMBOLS
+            .iter()
+            .position(|name| *name == symbol)
+            .filter(|index| self.explicit[*index])
+            .map(|index| self.colors[index])
+    }
+
+    /// Choose between the XPM literal colour and the preset (see
+    /// [`Palette::explicit`]).
+    pub fn set_prefer_literal(&mut self, prefer_literal: bool) {
+        self.prefer_literal = prefer_literal;
+    }
+
+    /// Does the literal colour in an XPM win over the preset?
+    pub fn prefers_literal(&self) -> bool {
+        self.prefer_literal
     }
 
     /// Override a symbol from its config or themerc representation.
@@ -123,6 +159,7 @@ impl Palette {
         match parse_color(value) {
             Some(color) => {
                 self.colors[index] = color;
+                self.explicit[index] = true;
                 true
             }
             None => {

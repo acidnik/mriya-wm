@@ -162,13 +162,38 @@ fn parse_color_spec(spec: &str, chars_per_pixel: usize, palette: &Palette) -> (S
             .copied()
     };
 
+    let literal = value_after("c");
+
     if let Some(symbol) = value_after("s") {
-        if let Some(color) = palette.get(symbol) {
+        let drawn = literal.and_then(super::palette::parse_color);
+        // What the theme or the config asked for always wins.
+        if let Some(color) = palette.explicit(symbol) {
+            return (code, color);
+        }
+
+        // `_1` is xfwm4's "selected" family: the accent a GTK theme provides,
+        // for which themes keep a placeholder of their own (Redmond paints a
+        // green titlebar body there). The rest is the theme's own chrome, and
+        // its literal colour is the accurate one - taking the preset instead
+        // turned the grey buttons of `Redmond` blue.
+        let accent = symbol.ends_with("_1");
+        let theme_first = palette.prefers_literal() && !accent;
+        let preset = palette.get(symbol);
+
+        if theme_first {
+            if let Some(color) = drawn {
+                return (code, color);
+            }
+        }
+        if let Some(color) = preset {
+            return (code, color);
+        }
+        if let Some(color) = drawn {
             return (code, color);
         }
     }
 
-    match value_after("c") {
+    match literal {
         Some(value) => match super::palette::parse_color(value) {
             Some(color) => (code, color),
             None => {
@@ -208,17 +233,48 @@ static char * test_xpm[] = {
     }
 
     #[test]
-    fn symbolic_colours_come_from_the_palette() {
+    fn the_literal_colour_wins_over_the_preset() {
+        // xfwm4 replaces this colour with the GTK palette, so a theme keeps the
+        // literal one as its own approximation; without GTK that is the better
+        // guess than our preset (which turned Redmond's grey buttons blue).
         let source = xpm(r##"/* XPM */
 static char * test_xpm[] = {
 "1 1 1 1",
-"+ c #FFFFFF s active_hilight_2",
+"+ c #D8D8D8 s active_color_2",
 "+",
 "};"##);
+        let image = parse(&source, &Palette::default()).unwrap();
+        assert_eq!(&image.pixels[0..4], &[0xD8, 0xD8, 0xD8, 255]);
+    }
+
+    #[test]
+    fn the_accent_family_keeps_the_preset() {
+        // `active_color_1` is the "selected" colour a GTK theme provides; the
+        // XPM only carries a placeholder for it.
+        let source = xpm(r##"/* XPM */
+static char * test_xpm[] = {
+"1 1 1 1",
+"$ c #8CB754 s active_color_1",
+"$",
+"};"##);
         let palette = Palette::default();
-        let expected = palette.get("active_hilight_2").unwrap();
+        let expected = palette.get("active_color_1").unwrap();
         let image = parse(&source, &palette).unwrap();
         assert_eq!(&image.pixels[0..4], &expected.to_array());
+    }
+
+    #[test]
+    fn an_explicit_palette_value_wins_over_the_literal() {
+        let mut palette = Palette::default();
+        assert!(palette.set("active_color_2", "#112233"));
+        let source = xpm(r##"/* XPM */
+static char * test_xpm[] = {
+"1 1 1 1",
+"+ c #D8D8D8 s active_color_2",
+"+",
+"};"##);
+        let image = parse(&source, &palette).unwrap();
+        assert_eq!(&image.pixels[0..4], &[0x11, 0x22, 0x33, 255]);
     }
 
     #[test]
