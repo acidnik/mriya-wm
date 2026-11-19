@@ -5,8 +5,19 @@
 # Для AUR по-прежнему используется contrib/PKGBUILD (источник с пином на коммит).
 
 pkgname=mriya-wm
-# Версия всегда берётся из Cargo.toml, чтобы не расходилась.
-pkgver=$(sed -n 's/^version = "\(.*\)"/\1/p' "$startdir/../Cargo.toml" | head -1)
+# Версия = версия из Cargo.toml + номер и хеш коммита (+ .dirty, если в дереве
+# есть незакоммиченные правки). Так `makepkg -si` каждый раз видит новую версию
+# и пересобирает: с неизменным pkgver он просто переиспользует готовый пакет.
+_git_dir="$startdir/.."
+_crate_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' "$_git_dir/Cargo.toml" | head -1)
+_git_count=$(git -C "$_git_dir" rev-list --count HEAD 2>/dev/null || echo 0)
+_git_rev=$(git -C "$_git_dir" rev-parse --short HEAD 2>/dev/null || echo nogit)
+if [ -n "$(git -C "$_git_dir" status --porcelain 2>/dev/null)" ]; then
+    _git_dirty=".dirty"
+else
+    _git_dirty=""
+fi
+pkgver="${_crate_ver}.r${_git_count}.g${_git_rev}${_git_dirty}"
 pkgrel=1
 pkgdesc="Stacking Wayland window manager with xfwm4 window decorations"
 arch=('x86_64')

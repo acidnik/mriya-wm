@@ -74,9 +74,15 @@ git pull
 cd contrib && makepkg -si -p PKGBUILD.dev     # собирает из этого дерева
 ```
 
-`contrib/PKGBUILD.dev` берёт `pkgver` из `Cargo.toml`, собирает `cargo build
---release --locked` в текущем дереве и ставит те же файлы, что и AUR-пакет.
-`contrib/src`, `contrib/pkg` и `*.pkg.tar.zst` в `.gitignore`.
+`contrib/PKGBUILD.dev` собирает `cargo build --release --locked` в текущем дереве
+и ставит те же файлы, что и AUR-пакет. `contrib/src`, `contrib/pkg` и
+`*.pkg.tar.zst` в `.gitignore`.
+
+`pkgver` собирается как `<версия из Cargo.toml>.r<номер коммита>.g<хеш>` плюс
+`.dirty`, если в дереве есть незакоммиченные правки, — поэтому `makepkg`
+пересобирает на каждый коммит. С неизменной версией он бы просто сказал
+«A package has already been built» и переустановил старый архив; если это всё же
+нужно (версия не изменилась), помогает `makepkg -sif -p PKGBUILD.dev`.
 
 Если удобнее вообще без чек-аута — можно однажды залить в AUR пакет
 `mriya-wm-git` (VCS-пакет собирает мастер-ветку), тогда хватит `paru -Syu`.
