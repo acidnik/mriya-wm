@@ -1,0 +1,156 @@
+// waybar для Mriya WM.
+//
+// Здесь только универсальные модули: они читают sysfs, D-Bus или PipeWire и
+// ничего не знают про оконный менеджер. Модулей `niri/*`, `hyprland/*`, `sway/*`
+// тут нет — они общаются с IPC конкретного композитора.
+//
+// Чего в Mriya пока нет (модули закомментированы ниже):
+//   ext/workspaces — нужен протокол ext-workspace-v1 и сами воркспейсы;
+//   wlr/taskbar    — нужен wlr-foreign-toplevel-management;
+//   idle_inhibitor — нужен zwp_idle_inhibit_manager_v1.
+//
+// Запуск:
+//   waybar -c ~/.config/mriya/waybar-config.jsonc -s ~/.config/mriya/waybar-style.css
+//
+// или скопируй оба файла в ~/.config/waybar/.
+
+{
+  "layer": "top",
+  "position": "top",
+  "height": 34,
+  "spacing": 6,
+  "margin-top": 0,
+  "margin-left": 0,
+  "margin-right": 0,
+  "fixed-center": true,
+  "modules-left": ["clock"],
+  "modules-center": ["cpu", "memory", "temperature"],
+  "modules-right": ["network", "pulseaudio", "tray"],
+
+  "clock": {
+    "format": "{:%a %d %b  %H:%M}",
+    "tooltip-format": "<tt>{calendar}</tt>",
+    "calendar": {
+      "mode": "month",
+      "mode-mon-col": 3,
+      "weeks-pos": "right",
+      "on-scroll": 1,
+      "format": {
+        "months": "<span color='#ffce8f'><b>{}</b></span>",
+        "days": "<span color='#cdd6f4'>{}</span>",
+        "weeks": "<span color='#8b93a7'><b>W{}</b></span>",
+        "weekdays": "<span color='#8b93a7'><b>{}</b></span>",
+        "today": "<span color='#f38ba8'><b><u>{}</u></b></span>"
+      }
+    }
+  },
+
+  "cpu": {
+    "interval": 2,
+    "format": "cpu {usage}%",
+    "tooltip": false,
+    "states": {
+      "warning": 70,
+      "critical": 90
+    }
+  },
+
+  "memory": {
+    "interval": 3,
+    "format": "mem {percentage}%",
+    "tooltip-format": "{used:0.1f}G / {total:0.1f}G"
+  },
+
+  "temperature": {
+    "interval": 3,
+    "critical-threshold": 85,
+    "format": "temp {temperatureC}°C",
+    "tooltip": false
+  },
+
+  // Нет жёсткого диска? Убери модуль или задай свой путь.
+  "disk": {
+    "interval": 30,
+    "path": "/",
+    "format": "disk {percentage_used}%",
+    "tooltip-format": "{used} / {total}"
+  },
+
+  "network": {
+    "interval": 3,
+    "format-wifi": "wifi {essid}",
+    "format-ethernet": "eth {ifname}",
+    "format-disconnected": "off",
+    "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}/{cidr}\n{frequency} GHz",
+    "tooltip-format-ethernet": "{ifname}\n{ipaddr}/{cidr}",
+    "tooltip-format-disconnected": "нет сети",
+    "on-click": "nm-connection-editor"
+  },
+
+  "pulseaudio": {
+    "format": "{icon} {volume}%",
+    "format-muted": "{icon} muted",
+    "format-icons": {
+      "headphone": "🎧",
+      "default": ["🔈", "🔉", "🔊"]
+    },
+    "on-click": "pavucontrol",
+    "on-click-right": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+    "on-scroll-up": "pactl set-sink-volume @DEFAULT_SINK@ +5%",
+    "on-scroll-down": "pactl set-sink-volume @DEFAULT_SINK@ -5%"
+  },
+
+  // Работает, если запущен статус-нотифаер (waybar сам является его хостом).
+  "tray": {
+    "icon-size": 16,
+    "spacing": 8
+  },
+
+  // Закомментировано: нужны протоколы, которых у Mriya ещё нет.
+  //
+  // "ext/workspaces": {
+  //   "format": "{name}",
+  //   "on-click": "activate"
+  // },
+  //
+  // "wlr/taskbar": {
+  //   "format": "{icon}",
+  //   "icon-size": 16,
+  //   "tooltip-format": "{title}",
+  //   "on-click": "activate",
+  //   "on-click-right": "close"
+  // },
+  //
+  // "idle_inhibitor": {
+  //   "format": "{icon}",
+  //   "format-icons": {
+  //     "activated": "🌙",
+  //     "deactivated": "☀"
+  //   }
+  // },
+  //
+  // Ноутбук:
+  // "battery": {
+  //   "interval": 30,
+  //   "states": {
+  //     "warning": 30,
+  //     "critical": 10
+  //   },
+  //   "format": "{icon} {capacity}%",
+  //   "format-charging": "⚡ {capacity}%",
+  //   "format-plugged": "⚡ {capacity}%",
+  //   "format-icons": ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+  // },
+  // "backlight": {
+  //   "device": "intel_backlight",
+  //   "format": "{percent}% {icon}",
+  //   "format-icons": ["🌑", "🌓", "🌕"]
+  // },
+
+  // Свой индикатор: любой скрипт, обновляется по интервалу.
+  // "custom/example": {
+  //   "exec": "echo hello",
+  //   "interval": 30,
+  //   "format": "{}"
+  // }
+}

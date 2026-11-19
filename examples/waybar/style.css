@@ -1,0 +1,116 @@
+/* Стиль waybar для Mriya WM.
+ *
+ * Нейтральная тёмная тема без привязки к конкретному композитору: цвета берутся
+ * из палитры Catppuccin Mocha только как значения по умолчанию, поменять можно
+ * в одном месте (переменные ниже).
+ */
+
+* {
+  font-family: "Sans", "Symbols Nerd Font", monospace;
+  font-size: 12px;
+  min-height: 0;
+}
+
+window#waybar {
+  background: rgba(24, 24, 30, 0.92);
+  color: #cdd6f4;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modules-left,
+.modules-center,
+.modules-right {
+  padding: 0 8px;
+}
+
+#clock,
+#cpu,
+#memory,
+#temperature,
+#disk,
+#network,
+#pulseaudio,
+#tray {
+  padding: 0 8px;
+  margin: 4px 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+#clock {
+  font-weight: bold;
+  background: rgba(137, 180, 250, 0.16);
+}
+
+#cpu {
+  color: #a6e3a1;
+}
+
+#memory {
+  color: #89b4fa;
+}
+
+#temperature {
+  color: #f9e2af;
+}
+
+#temperature.critical {
+  color: #f38ba8;
+}
+
+#cpu.warning,
+#cpu.critical {
+  color: #f9e2af;
+}
+
+#cpu.critical {
+  color: #f38ba8;
+}
+
+#disk {
+  color: #cba6f7;
+}
+
+#network {
+  color: #94e2d5;
+}
+
+#network.disconnected {
+  color: #f38ba8;
+}
+
+#pulseaudio {
+  color: #fab387;
+}
+
+#pulseaudio.muted {
+  color: #6c7086;
+}
+
+#tray {
+  background: transparent;
+}
+
+#tray > .passive {
+  -gtk-icon-effect: dim;
+}
+
+#tray > .needs-attention {
+  -gtk-icon-effect: highlight;
+  background: rgba(243, 139, 168, 0.25);
+}
+
+/* Когда появятся воркспейсы (ext/workspaces):
+ *
+ * #workspaces button {
+ *   padding: 0 6px;
+ *   border-radius: 6px;
+ *   background: transparent;
+ * }
+ * #workspaces button.active {
+ *   background: rgba(137, 180, 250, 0.28);
+ * }
+ * #workspaces button:hover {
+ *   background: rgba(255, 255, 255, 0.08);
+ * }
+ */

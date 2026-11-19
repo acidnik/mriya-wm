@@ -40,6 +40,9 @@
   внутри него нельзя звать `with_states` на той же поверхности — получается
   рекурсивный лок и композитор виснет целиком. Поверхности собираются в Vec и
   масштаб им выставляется уже после.
+- Frame-callback'и панелям тоже нужны: они уходили только окнам, и GTK-панель
+  (waybar) рисовала фон один раз и замирала — в баре не было текста, только
+  плашки модулей. Теперь `send_frame` вызывается и для слоёв.
 
 ### Итерация 15 — протоколы, которых ждут приложения
 
@@ -518,6 +521,18 @@ src/grabs/               интерактивное перемещение и р
 - Из niri-конфига пока не реализованы `layout`, `output`, `window-rule`,
   `prefer-no-csd`, `animations`, настройки устройств ввода (им нужен libinput,
   т.е. TTY-бэкенд).
+
+## Панели
+
+`examples/waybar/` — конфиг и стиль waybar без привязки к конкретному
+композитору: только универсальные модули (clock, cpu, memory, temperature, disk,
+network, pulseaudio, tray). Модули `niri/*`, `hyprland/*`, `sway/*` говорят с
+IPC своего композитора и здесь не работают; `ext/workspaces` требует протокола
+`ext-workspace-v1` и самих воркспейсов, `wlr/taskbar` — `wlr-foreign-toplevel-
+management`, `idle_inhibitor` — `zwp_idle_inhibit_manager_v1`. Все три пока
+закомментированы в конфиге.
+
+Запуск: `waybar -c examples/waybar/config.jsonc -s examples/waybar/style.css`.
 
 ## Следующие шаги
 

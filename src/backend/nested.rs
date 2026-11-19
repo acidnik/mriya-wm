@@ -296,13 +296,18 @@ impl NestedRenderer {
 
         // Clients drive their animation from frame callbacks; without this they
         // would render exactly once and then wait forever.
+        let now = state.start_time.elapsed();
         for window in state.space.elements() {
-            window.send_frame(
-                &self.output,
-                state.start_time.elapsed(),
-                Some(Duration::ZERO),
-                |_, _| Some(self.output.clone()),
-            );
+            window.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| {
+                Some(self.output.clone())
+            });
+        }
+        // Panels are GTK clients too: waybar drew its background once and then
+        // waited for a frame callback, so its text never appeared.
+        for (layer, _) in crate::layers::surfaces(&state.space) {
+            layer.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| {
+                Some(self.output.clone())
+            });
         }
 
         Ok(())

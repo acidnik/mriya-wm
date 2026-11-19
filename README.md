@@ -29,3 +29,7 @@ are implemented; other niri sections are ignored for now.
 See [docs/architecture.md](docs/architecture.md) for the code layout, keybindings
 and next steps (the doc is in Russian).
 
+Panels: `zwlr_layer_shell_v1` is supported (panels, bars, wallpapers reserve
+their space), so waybar works. A compositor-agnostic waybar config and style
+live in [examples/waybar](examples/waybar).
+
