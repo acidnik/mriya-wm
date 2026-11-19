@@ -517,12 +517,22 @@ pub fn hit_test(
                     // button area): the click belongs to whatever is below.
                     continue;
                 }
-                if position.y < content.loc.y as f64 {
+                let edge = if frame.maximized {
+                    // A maximized window is not resized by its borders.
+                    ResizeEdge::empty()
+                } else {
+                    edge_at(&content, &outer, position)
+                };
+                if !edge.is_empty() {
+                    FramePart::Edge(edge)
+                } else if position.y < content.loc.y as f64 {
                     FramePart::Titlebar
                 } else {
-                    FramePart::Edge(edge_at(&content, geometry, position))
+                    FramePart::Content
                 }
             }
+        } else if !frame.maximized && !edge_at(&content, &outer, position).is_empty() {
+            FramePart::Edge(edge_at(&content, &outer, position))
         } else if position.y < content.loc.y as f64 {
             button_rects(outer, geometry.top)
                 .into_iter()
@@ -530,7 +540,7 @@ pub fn hit_test(
                 .map(|(button, _)| FramePart::Button(button))
                 .unwrap_or(FramePart::Titlebar)
         } else {
-            FramePart::Edge(edge_at(&content, geometry, position))
+            FramePart::Content
         };
 
         return Some(FrameHit {
@@ -578,9 +588,16 @@ fn client_edge_at(visible: &Rectangle<i32, Logical>, position: Point<f64, Logica
     edge
 }
 
+/// Width of the resizable strip along the top edge of the frame.
+///
+/// The titlebar covers the whole top of the frame, so without this strip a
+/// window could be resized by three borders only.
+const TOP_EDGE_GRAB: i32 = 5;
+
+/// Resize edge for a point on the frame of a server-decorated window.
 fn edge_at(
     content: &Rectangle<i32, Logical>,
-    geometry: FrameGeometry,
+    outer: &Rectangle<i32, Logical>,
     position: Point<f64, Logical>,
 ) -> ResizeEdge {
     let mut edge = ResizeEdge::empty();
@@ -590,13 +607,12 @@ fn edge_at(
     if position.x >= (content.loc.x + content.size.w) as f64 {
         edge |= ResizeEdge::RIGHT;
     }
-    if position.y < content.loc.y as f64 {
+    if position.y < (outer.loc.y + TOP_EDGE_GRAB) as f64 {
         edge |= ResizeEdge::TOP;
     }
     if position.y >= (content.loc.y + content.size.h) as f64 {
         edge |= ResizeEdge::BOTTOM;
     }
-    let _ = geometry;
     edge
 }
 
@@ -664,6 +680,39 @@ mod tests {
     fn full_surface_geometry_means_no_client_decorations() {
         let surface = Rectangle::new(Point::from((0, 0)), Size::from((696, 496)));
         assert!(!geometry_looks_inset(surface, surface));
+    }
+
+    #[test]
+    fn top_strip_of_the_titlebar_resizes() {
+        // Frame with a 29 px titlebar and 5 px borders around a 100x100 content.
+        let content = Rectangle::new(Point::from((5, 29)), Size::from((100, 100)));
+        let outer = Rectangle::new(Point::from((0, 0)), Size::from((110, 134)));
+
+        // The titlebar covers the top of the frame; its first pixels are the
+        // top resize edge, the rest of the bar drags the window.
+        assert_eq!(
+            edge_at(&content, &outer, Point::from((50.0, 2.0))),
+            ResizeEdge::TOP
+        );
+        assert!(edge_at(&content, &outer, Point::from((50.0, 20.0))).is_empty());
+        // The borders next to the titlebar work as well.
+        assert_eq!(
+            edge_at(&content, &outer, Point::from((2.0, 20.0))),
+            ResizeEdge::LEFT
+        );
+        // Corners combine.
+        assert_eq!(
+            edge_at(&content, &outer, Point::from((2.0, 2.0))),
+            ResizeEdge::TOP_LEFT
+        );
+        assert_eq!(
+            edge_at(&content, &outer, Point::from((108.0, 2.0))),
+            ResizeEdge::TOP_RIGHT
+        );
+        assert_eq!(
+            edge_at(&content, &outer, Point::from((50.0, 132.0))),
+            ResizeEdge::BOTTOM
+        );
     }
 
     #[test]
