@@ -409,6 +409,23 @@ fn connector_name(info: &connector::Info) -> String {
 
 /// Start the compositor on a TTY.
 pub fn run(mut event_loop: EventLoop<'static, Mriya>, mut state: Mriya) -> Result<()> {
+    // Without DRM master the compositor happily configures the connector and
+    // renders into buffers nobody scans out: the screen goes black and nothing
+    // can bring it back. That happens when Mriya is started inside another
+    // compositor, which already owns the GPU.
+    if let Some(display) = std::env::var_os("WAYLAND_DISPLAY") {
+        if std::env::var_os("MRIYA_ALLOW_NESTED_DRM").is_none() {
+            return Err(anyhow!(
+                "WAYLAND_DISPLAY={} is set, so this is a session inside another compositor that \
+                 already holds the GPU (drm master). Nothing would be drawn.\n\
+                 Start Mriya from a free VT instead:\n    chvt 2        # or Ctrl+Alt+F2 (Fn+F2 on \
+                 laptops with media keys)\n    log in on the text console\n    mriya-wm --drm\n\
+                 (MRIYA_ALLOW_NESTED_DRM=1 tries anyway.)",
+                display.to_string_lossy()
+            ));
+        }
+    }
+
     let (session, notifier) = LibSeatSession::new()
         .map_err(|err| anyhow!("cannot open a session through logind/seatd: {err}"))?;
     let seat_name = session.seat();
